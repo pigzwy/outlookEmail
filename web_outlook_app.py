@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# version: 2026.03.25
+# version: 2026.03.25.1
 """
 Outlook 邮件 Web 应用
 基于 Flask 的 Web 界面，支持多邮箱管理和邮件查看
