@@ -2408,6 +2408,30 @@ def api_delete_account_by_email(email_addr):
         return jsonify({'success': False, 'error': '删除失败'})
 
 
+@app.route('/api/accounts/batch-delete', methods=['POST'])
+@login_required
+def api_batch_delete_accounts():
+    """批量删除账号"""
+    data = request.json
+    account_ids = data.get('account_ids', [])
+
+    if not account_ids:
+        return jsonify({'success': False, 'error': '请选择要删除的账号'})
+
+    db = get_db()
+    try:
+        placeholders = ','.join('?' * len(account_ids))
+        db.execute(f'DELETE FROM account_tags WHERE account_id IN ({placeholders})', account_ids)
+        db.execute(f'DELETE FROM account_refresh_logs WHERE account_id IN ({placeholders})', account_ids)
+        result = db.execute(f'DELETE FROM accounts WHERE id IN ({placeholders})', account_ids)
+        db.commit()
+        deleted_count = result.rowcount
+        log_audit('batch_delete', 'accounts', ','.join(map(str, account_ids)), f"批量删除 {deleted_count} 个账号")
+        return jsonify({'success': True, 'message': f'成功删除 {deleted_count} 个账号'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'删除失败: {str(e)}'})
+
+
 # ==================== 账号刷新 API ====================
 
 def log_refresh_result(account_id: int, account_email: str, refresh_type: str, status: str, error_message: str = None):
@@ -4460,6 +4484,64 @@ def api_update_settings():
 
 
 # ==================== 对外 API ====================
+
+@app.route('/api/external/accounts', methods=['GET'])
+@csrf_exempt
+@api_key_required
+def api_external_get_accounts():
+    """对外 API：获取所有邮箱账号（含标签信息）"""
+    group_id = request.args.get('group_id', type=int)
+    accounts = load_accounts(group_id)
+
+    db = get_db()
+    result = []
+    for acc in accounts:
+        # 查询最后刷新状态
+        cursor = db.execute('''
+            SELECT status, error_message FROM account_refresh_logs
+            WHERE account_id = ? ORDER BY created_at DESC LIMIT 1
+        ''', (acc['id'],))
+        last_log = cursor.fetchone()
+
+        result.append({
+            'id': acc['id'],
+            'email': acc['email'],
+            'group_id': acc.get('group_id'),
+            'group_name': acc.get('group_name', '默认分组'),
+            'remark': acc.get('remark', ''),
+            'status': acc.get('status', 'active'),
+            'tags': acc.get('tags', []),
+            'last_refresh_at': acc.get('last_refresh_at', ''),
+            'last_refresh_status': last_log['status'] if last_log else None,
+        })
+
+    return jsonify({'success': True, 'accounts': result})
+
+
+@app.route('/api/external/accounts/tags', methods=['POST'])
+@csrf_exempt
+@api_key_required
+def api_external_manage_tags():
+    """对外 API：批量管理账号标签"""
+    data = request.json
+    account_ids = data.get('account_ids', [])
+    tag_id = data.get('tag_id')
+    action = data.get('action')  # add, remove
+
+    if not account_ids or not tag_id or action not in ('add', 'remove'):
+        return jsonify({'success': False, 'error': '参数不完整，需要 account_ids, tag_id, action(add/remove)'}), 400
+
+    count = 0
+    for acc_id in account_ids:
+        if action == 'add':
+            if add_account_tag(acc_id, tag_id):
+                count += 1
+        elif action == 'remove':
+            if remove_account_tag(acc_id, tag_id):
+                count += 1
+
+    return jsonify({'success': True, 'message': f'成功处理 {count} 个账号'})
+
 
 @app.route('/api/external/emails', methods=['GET'])
 @csrf_exempt

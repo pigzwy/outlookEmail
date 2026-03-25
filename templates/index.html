@@ -1415,11 +1415,16 @@
             <!-- 批量操作栏 -->
             <div id="batchActionBar"
                 style="display: none; padding: 8px 16px; border-top: 1px solid #e5e5e5; background: #f8f9fa; gap: 8px; align-items: center;">
+                <label style="display: flex; align-items: center; gap: 4px; cursor: pointer; margin-right: 4px;">
+                    <input type="checkbox" id="selectAllAccounts" onclick="toggleSelectAllAccounts()" style="cursor: pointer;">
+                    <span style="font-size: 12px; color: #666;">全选</span>
+                </label>
                 <span id="selectedCount" style="font-size: 12px; color: #666;">已选 0 项</span>
                 <div style="flex: 1;"></div>
                 <button class="btn btn-sm btn-secondary" onclick="showBatchTagModal('add')">打标签</button>
                 <button class="btn btn-sm btn-secondary" onclick="showBatchTagModal('remove')">去标签</button>
                 <button class="btn btn-sm btn-secondary" onclick="showBatchMoveGroupModal()">移动分组</button>
+                <button class="btn btn-sm btn-secondary" style="background-color: #dc3545; color: white; border-color: #dc3545;" onclick="batchDeleteAccounts()">批量删除</button>
             </div>
             <div class="account-panel-footer">
                 <button class="add-account-btn" onclick="showAddAccountModal()">+ 导入邮箱</button>
@@ -1493,6 +1498,23 @@
                         <div class="empty-state-text">选择一封邮件查看详情</div>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 通用确认模态框 -->
+    <div class="modal" id="confirmModal" onclick="if(event.target === this) hideConfirmModal()">
+        <div class="modal-content" style="max-width: 420px;">
+            <div class="modal-header">
+                <h3 id="confirmModalTitle">确认操作</h3>
+                <button class="modal-close" onclick="hideConfirmModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p id="confirmModalMessage" style="margin: 0; font-size: 14px; color: #333; line-height: 1.6;"></p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="hideConfirmModal()">取消</button>
+                <button class="btn" id="confirmModalOkBtn" onclick="confirmModalCallback()">确定</button>
             </div>
         </div>
     </div>
@@ -5836,17 +5858,131 @@ ${details}
 
         // ==================== 批量操作 ====================
 
+        // 全选/取消全选邮箱账号
+        function toggleSelectAllAccounts() {
+            const selectAllCb = document.getElementById('selectAllAccounts');
+            const checkboxes = document.querySelectorAll('.account-select-checkbox');
+            checkboxes.forEach(cb => cb.checked = selectAllCb.checked);
+            updateBatchActionBar();
+        }
+
         // 更新批量操作栏状态
         function updateBatchActionBar() {
+            const all = document.querySelectorAll('.account-select-checkbox');
             const checked = document.querySelectorAll('.account-select-checkbox:checked');
             const bar = document.getElementById('batchActionBar');
             const countSpan = document.getElementById('selectedCount');
+            const selectAllCb = document.getElementById('selectAllAccounts');
 
             if (checked.length > 0) {
                 bar.style.display = 'flex';
                 countSpan.textContent = `已选 ${checked.length} 项`;
             } else {
                 bar.style.display = 'none';
+            }
+
+            // 同步全选复选框状态
+            if (selectAllCb) {
+                selectAllCb.checked = all.length > 0 && checked.length === all.length;
+                selectAllCb.indeterminate = checked.length > 0 && checked.length < all.length;
+            }
+        }
+
+        // ==================== 通用确认弹窗 ====================
+
+        let _confirmModalResolve = null;
+
+        function showConfirmModal(title, message, isDanger = false) {
+            document.getElementById('confirmModalTitle').textContent = title;
+            document.getElementById('confirmModalMessage').textContent = message;
+            const okBtn = document.getElementById('confirmModalOkBtn');
+            if (isDanger) {
+                okBtn.style.backgroundColor = '#dc3545';
+                okBtn.style.borderColor = '#dc3545';
+                okBtn.style.color = '#fff';
+                okBtn.textContent = '确认删除';
+            } else {
+                okBtn.style.backgroundColor = '';
+                okBtn.style.borderColor = '';
+                okBtn.style.color = '';
+                okBtn.textContent = '确定';
+            }
+            document.getElementById('confirmModal').classList.add('show');
+            return new Promise(resolve => { _confirmModalResolve = resolve; });
+        }
+
+        function confirmModalCallback() {
+            hideConfirmModal();
+            if (_confirmModalResolve) { _confirmModalResolve(true); _confirmModalResolve = null; }
+        }
+
+        function hideConfirmModal() {
+            document.getElementById('confirmModal').classList.remove('show');
+            if (_confirmModalResolve) { _confirmModalResolve(false); _confirmModalResolve = null; }
+        }
+
+        // 批量删除邮箱账号
+        async function batchDeleteAccounts() {
+            const checked = document.querySelectorAll('.account-select-checkbox:checked');
+            const accountIds = Array.from(checked).map(cb => parseInt(cb.value));
+
+            if (accountIds.length === 0) {
+                showToast('请选择要删除的账号', 'error');
+                return;
+            }
+
+            const confirmed = await showConfirmModal(
+                '批量删除确认',
+                `确定要删除选中的 ${accountIds.length} 个邮箱账号吗？此操作不可恢复！`,
+                true
+            );
+            if (!confirmed) return;
+
+            try {
+                const response = await fetch('/api/accounts/batch-delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ account_ids: accountIds })
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    showToast(data.message, 'success');
+
+                    // 清除缓存
+                    if (currentGroupId) {
+                        delete accountsCache[currentGroupId];
+                    }
+
+                    // 如果当前选中的账号被删除了，清除状态
+                    if (currentAccount) {
+                        const deletedEmails = Array.from(checked).map(cb => {
+                            const item = cb.closest('.account-item');
+                            const emailEl = item ? item.querySelector('.account-email') : null;
+                            return emailEl ? emailEl.textContent.replace(/^\d+\.\s*/, '').trim() : '';
+                        });
+                        if (deletedEmails.includes(currentAccount)) {
+                            currentAccount = null;
+                            document.getElementById('currentAccount').classList.remove('show');
+                            document.getElementById('emailList').innerHTML = `
+                                <div class="empty-state">
+                                    <div class="empty-state-icon">📬</div>
+                                    <div class="empty-state-text">请从左侧选择一个邮箱账号</div>
+                                </div>
+                            `;
+                        }
+                    }
+
+                    // 刷新列表
+                    loadGroups();
+                    if (currentGroupId) {
+                        loadAccountsByGroup(currentGroupId, true);
+                    }
+                } else {
+                    handleApiError(data, '批量删除失败');
+                }
+            } catch (error) {
+                showToast('批量删除失败', 'error');
             }
         }
 
