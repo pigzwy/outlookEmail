@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   outlook-mail-reader:
-    image: ghcr.io/llpig/outlookemail:latest
+    image: llpig/outlookemail:latest
     container_name: outlook-mail-reader
     restart: unless-stopped
     ports:
@@ -10,6 +10,6 @@ services:
     volumes:
       - ./data:/app/data
     environment:
-      - LOGIN_PASSWORD=admin123
+      - LOGIN_PASSWORD=15695277113
       - SECRET_KEY=change-me-to-a-random-string
       - FLASK_ENV=production
