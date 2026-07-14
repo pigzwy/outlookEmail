@@ -89,12 +89,14 @@ sudo systemctl reload nginx
 
 ### Session 过期问题
 
-1. **设置 SECRET_KEY 环境变量（必须）**
+1. **服务器部署时设置固定 SECRET_KEY**
    ```yaml
    environment:
      - SECRET_KEY=your-fixed-secret-key-here
    ```
    使用 `python -c 'import secrets; print(secrets.token_hex(32))'` 生成
+
+   如果使用 Windows `exe`，程序会在首次启动时自动生成并保存固定 `SECRET_KEY`，不要删除对应数据目录下的密钥文件。
 
 2. 默认 Session 有效期为 7 天，重启应用不会导致 Session 失效（使用固定 SECRET_KEY）
 
@@ -133,10 +135,13 @@ A: SQLite 数据库 `data/outlook_accounts.db`，建议定期备份
 A: 收件箱（Inbox）、垃圾邮件（Junk Email）、已删除邮件（Deleted Items）
 
 ### Q: 如何批量导入邮箱？
-A: 格式：`邮箱----密码----client_id----refresh_token`，每行一个
+A: 默认格式：`邮箱----密码----client_id----refresh_token`，每行一个；也支持在导入弹窗中切换为 `邮箱----密码----refresh_token----client_id`
 
 ### Q: 如何导出邮箱账号？
-A: (1) 导出单个分组 (2) 导出所有 (3) 导出选中分组
+A: (1) 导出单个分组 (2) 导出所有 (3) 导出选中分组 (4) 在邮箱列表批量选择后导出选中账号
+
+### Q: 批量选择怎么拖拽？Mac 触控板没有反应怎么办？
+A: 先点击邮箱面板顶部的「☑」进入批量选择模式，然后在账号行或左侧选择框上按住并上下拖动。只按住 `Shift` 点击适合连续范围选择，不等同于拖拽；如果要用触控板拖拽，需要保持按下状态经过多行账号。
 
 ### Q: Docker 容器无法启动怎么办？
 A: (1) `docker logs outlook-mail-reader` (2) 检查端口 (3) 检查目录权限 (4) 拉取最新镜像
