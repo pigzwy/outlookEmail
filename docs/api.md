@@ -61,7 +61,7 @@
 | POST | `/api/accounts` | Session + CSRF | JSON | 批量导入账号 |
 | PUT | `/api/accounts/<account_id>` | Session + CSRF | JSON | 更新账号 |
 | POST | `/api/accounts/<account_id>/reauthorize` | Session + CSRF | JSON | 重新授权已有 Outlook 账号并自动刷新验证 |
-| GET | `/api/outlook-upload-accounts` | Session | JSON | 分页查询 Outlook 自动化授权上传账号，返回表格显示用明文密码 |
+| GET | `/api/outlook-upload-accounts` | Session | JSON | 分页查询 Outlook 自动化授权上传账号，批量返回表格显示用明文密码 |
 | POST | `/api/outlook-upload-accounts` | Session + CSRF | JSON | 新增 Outlook 自动化授权上传账号（可带 group_id / tag_ids / proxy_url） |
 | PUT | `/api/outlook-upload-accounts/<account_id>` | Session + CSRF | JSON | 修改上传账号邮箱、密码或备注 |
 | DELETE | `/api/outlook-upload-accounts/<account_id>` | Session + CSRF | JSON | 删除上传账号 |
@@ -255,15 +255,19 @@ Cookie: session=<session-cookie>
 ```json
 {
   "code": "IMAP_CONNECT_FAILED",
-  "message": "IMAP 连接失败",
+  "reason_code": "MAIL_NETWORK_FAILED",
+  "message": "网络连接失败：无法连接邮件服务，请检查 DNS、防火墙、代理和服务地址",
   "type": "IMAPConnectError",
   "status": 502,
   "details": "",
-  "trace_id": "..."
+  "trace_id": "...",
+  "category": "network",
+  "proxy_configured": false,
+  "retryable": true
 }
 ```
 
-AI 客户端应优先判断 `success`，再兼容 `error` 既可能是字符串，也可能是对象。
+其中 `code` 保持原有接口错误码，`reason_code` 提供更细的代理、超时、TLS 或网络失败原因。AI 客户端应优先判断 `success`，再兼容 `error` 既可能是字符串，也可能是对象。
 
 ### GET `/api/csrf-token`
 
@@ -610,7 +614,7 @@ curl -X POST -H "X-API-Key: your-api-key" -H "Content-Type: application/json" \
 安全约束：
 
 - 后端保留加密后的邮箱密码。
-- 列表响应返回 `password` 明文，供管理端表格小眼睛切换显示/隐藏。
+- 列表响应批量返回 `password` 明文，供管理端表格小眼睛切换显示/隐藏。
 - 新增/修改响应不返回 `password` 明文。
 - 前端使用 `has_password` / `password_length` 判断是否已保存密码，并使用 `password` 执行表格内显示切换。
 
@@ -623,10 +627,13 @@ curl -X POST -H "X-API-Key: your-api-key" -H "Content-Type: application/json" \
 | 参数 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `page` | integer | 否 | 页码，默认 `1` |
-| `page_size` | integer | 否 | 每页数量，默认 `20`，最大 `200` |
+| `page_size` | integer | 否 | 每页数量，API 默认 `20`，最大 `1000`；管理端默认 `20`，提供 `10`、`20`、`50`、`100` 档位 |
 | `keyword` | string | 否 | 按邮箱或备注模糊搜索 |
+| `auth_status` | string | 否 | 授权状态：`all`（默认）、`authorized`、`unauthorized`；未知值按 `all` 处理 |
 
-响应中的 `items[]` 包含已解密的 `password` 字段；`tags` 来源于同邮箱正式账号在 `account_tags` / `tags` 中绑定的标签，尚未匹配正式账号时为空数组：
+`keyword` 和 `auth_status` 同时传入时按 AND 组合筛选，响应中的 `total` 和 `total_pages` 基于组合筛选后的结果计算。
+
+响应中的 `items[]` 包含已解密的 `password` 字段；`proxy_url` 是暂存记录保存的账号级代理，不包含分组继承代理，列表序列化时会移除 URL 中的用户名、密码、路径和查询参数；`tags` 来源于同邮箱正式账号在 `account_tags` / `tags` 中绑定的标签，尚未匹配正式账号时为空数组：
 
 ```json
 {
@@ -637,11 +644,14 @@ curl -X POST -H "X-API-Key: your-api-key" -H "Content-Type: application/json" \
       "email": "user@outlook.com",
       "password": "secret",
       "has_password": true,
-      "password_length": 12,
+      "password_length": 6,
       "is_authorized": false,
       "status": "active",
       "remark": "note",
       "source": "external_api",
+      "group_id": 1,
+      "proxy_url": "socks5://host:1080",
+      "tag_ids": [1],
       "tags": [
         {
           "id": 1,
@@ -2256,6 +2266,7 @@ POST /api/cloudflare/channels
 | `smtp_use_ssl` | 是否启用 SSL |
 | `telegram_bot_token` | Telegram Bot Token |
 | `telegram_chat_id` | Telegram Chat ID |
+| `telegram_topic_id` | Telegram Topic ID（可选，话题群组的 message_thread_id） |
 | `normal_mail_local_retention_enabled` | 是否启用普通邮箱本地保留 |
 
 ### PUT `/api/settings`
@@ -2322,6 +2333,7 @@ POST /api/cloudflare/channels
 | `smtp_use_ssl` | bool | 是否启用 SSL |
 | `telegram_bot_token` | string | Telegram Bot Token |
 | `telegram_chat_id` | string | Telegram Chat ID |
+| `telegram_topic_id` | string | Telegram Topic ID（可选，话题群组的 message_thread_id，纯数字） |
 
 #### 请求示例
 
@@ -2594,7 +2606,8 @@ Telegram 测试：
   "config": {
     "telegram": {
       "bot_token": "123:abc",
-      "chat_id": "123456"
+      "chat_id": "123456",
+      "topic_id": "789"
     }
   }
 }

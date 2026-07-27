@@ -7,7 +7,7 @@
 ### 体验站点（可能非最新版本）
 https://aso.de5.net
 admin123
-注意：体验站点请勿修改密码或存放实际数据，部署在无持久化的服务上，数据随时可能丢失恢复初始状态
+注意：体验站点请勿修改密码或存放实际数据，部署在无持久化的服务上，数据随时可能丢失恢复初始状态；并且由于大家都能登录看到，并且好像有进程在扫描，所以非常可能存在账号被盗的风险
 
 ## 🌿 版本管理与发布
 
@@ -51,7 +51,7 @@ admin123
 
 ```bash
 # 拉取最新镜像
-docker pull ghcr.io/assast/outlookemail:latest
+docker pull llpig/outlookemail:latest
 
 # 运行容器
 docker run -d \
@@ -60,7 +60,7 @@ docker run -d \
   -v $(pwd)/data:/app/data \
   -e LOGIN_PASSWORD=admin123 \
   -e SECRET_KEY=your-secret-key-here \
-  ghcr.io/assast/outlookemail:latest
+  llpig/outlookemail:latest
 ```
 
 ### 方式四：使用 Python 直接运行
@@ -88,7 +88,7 @@ python -m pip install -r requirements.txt; $env:SECRET_KEY = (& python -c "impor
 version: '3.8'
 services:
   outlook-mail-reader:
-    image: ghcr.io/assast/outlookemail:latest
+    image: llpig/outlookemail:latest
     container_name: outlook-mail-reader
     ports:
       - "5000:5000"
@@ -120,7 +120,7 @@ docker-compose up -d
 version: '3.8'
 services:
   outlook-mail-reader:
-    image: ghcr.io/assast/outlookemail:latest
+    image: llpig/outlookemail:latest
     container_name: outlook-mail-reader
     ports:
       - "5000:5000"

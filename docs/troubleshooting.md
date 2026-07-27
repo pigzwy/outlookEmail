@@ -17,7 +17,7 @@ docker logs outlook-mail-reader
 lsof -i :5000
 
 # 4. 重新拉取镜像并重启
-docker pull ghcr.io/assast/outlookemail:latest
+docker pull llpig/outlookemail:latest
 docker-compose down
 docker-compose up -d
 ```
@@ -50,7 +50,7 @@ docker exec outlook-mail-reader python -c "from web_outlook_app import init_db; 
 docker-compose restart
 
 # 方法 3：使用最新镜像
-docker pull ghcr.io/assast/outlookemail:latest
+docker pull llpig/outlookemail:latest
 docker-compose down
 docker-compose up -d
 ```

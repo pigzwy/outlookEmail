@@ -678,6 +678,131 @@ class ImapFolderResolutionTests(unittest.TestCase):
         self.assertFalse(merged['folder_summaries']['junkemail']['has_more'])
         self.assertEqual(merged['folder_summaries']['junkemail']['error'], {'message': 'junk failed'})
 
+    def test_merge_folder_results_all_failed_preserves_protocol_details(self):
+        graph_error = {
+            'code': 'EMAIL_FETCH_FAILED',
+            'message': 'Graph mailbox not enabled',
+            'type': 'GraphError',
+            'status': 403,
+            'details': 'MailboxNotEnabledForRESTAPI',
+            'trace_id': 'trace-graph-1',
+            'reason_code': 'MAIL_FETCH_EXCEPTION',
+            'category': 'mail',
+        }
+        imap_new_error = {
+            'code': 'IMAP_AUTH_FAILED',
+            'message': 'IMAP AUTHENTICATE failed',
+            'type': 'IMAPAuthError',
+            'status': 401,
+            'details': 'AUTHENTICATE failed.',
+            'trace_id': 'trace-imap-1',
+        }
+        results = {
+            'inbox': {
+                'success': False,
+                'error': '无法获取邮件，所有方式均失败',
+                'details': {
+                    'graph': graph_error,
+                    'imap_new': imap_new_error,
+                    'imap_old': {'code': 'IMAP_CONNECT_FAILED', 'message': 'old imap down'},
+                },
+            },
+            'junkemail': {
+                'success': False,
+                'error': '无法获取邮件，所有方式均失败',
+                'details': {
+                    'graph': graph_error,
+                    'imap_new': imap_new_error,
+                },
+            },
+        }
+
+        merged = web_outlook_app.merge_folder_results(results, 0, 40)
+
+        self.assertFalse(merged['success'])
+        self.assertEqual(merged['error'], '无法获取邮件，所有方式均失败')
+
+        inbox_detail = merged['details']['inbox']
+        self.assertIsInstance(inbox_detail, dict)
+        self.assertEqual(inbox_detail['code'], 'EMAIL_FETCH_FAILED')
+        self.assertEqual(inbox_detail['message'], 'Graph mailbox not enabled')
+        self.assertEqual(inbox_detail['type'], 'GraphError')
+        self.assertEqual(inbox_detail['status'], 403)
+        self.assertEqual(inbox_detail['trace_id'], 'trace-graph-1')
+        self.assertEqual(inbox_detail['details']['graph'], graph_error)
+        self.assertEqual(inbox_detail['details']['imap_new'], imap_new_error)
+        self.assertIn('imap_old', inbox_detail['details'])
+
+        junk_detail = merged['details']['junkemail']
+        self.assertEqual(junk_detail['message'], 'Graph mailbox not enabled')
+        self.assertEqual(junk_detail['details']['graph']['code'], 'EMAIL_FETCH_FAILED')
+
+    def test_merge_folder_results_partial_failure_preserves_protocol_details(self):
+        results = {
+            'inbox': {
+                'success': True,
+                'emails': [{'id': 'inbox-1', 'folder': 'inbox', 'date': '2026-01-01T00:00:00Z'}],
+                'method': 'Graph API',
+                'has_more': False,
+                'request_method': 'graph',
+            },
+            'junkemail': {
+                'success': False,
+                'error': '无法获取邮件，所有方式均失败',
+                'details': {
+                    'graph': {
+                        'code': 'EMAIL_FETCH_FAILED',
+                        'message': 'junk graph failed',
+                        'type': 'GraphError',
+                        'status': 403,
+                        'trace_id': 'trace-junk',
+                    },
+                    'imap_new': {
+                        'code': 'IMAP_AUTH_FAILED',
+                        'message': 'junk imap failed',
+                    },
+                },
+            },
+        }
+
+        merged = web_outlook_app.merge_folder_results(results, 0, 40)
+
+        self.assertTrue(merged['success'])
+        self.assertTrue(merged['partial'])
+        junk_error = merged['details']['junkemail']
+        self.assertEqual(junk_error['message'], 'junk graph failed')
+        self.assertEqual(junk_error['code'], 'EMAIL_FETCH_FAILED')
+        self.assertEqual(junk_error['status'], 403)
+        self.assertEqual(junk_error['details']['imap_new']['message'], 'junk imap failed')
+        self.assertEqual(
+            merged['folder_summaries']['junkemail']['error']['details']['graph']['message'],
+            'junk graph failed',
+        )
+
+    def test_build_folder_failure_detail_keeps_structured_top_error(self):
+        top_error = {
+            'code': 'EMAIL_FETCH_TIMEOUT',
+            'message': '获取邮件超时，请稍后重试',
+            'type': 'TimeoutError',
+            'status': 504,
+            'details': '',
+            'trace_id': 'timeout-1',
+        }
+        result = {
+            'success': False,
+            'error': top_error,
+            'details': {
+                'graph': {'code': 'EMAIL_FETCH_FAILED', 'message': 'should not override'},
+            },
+        }
+
+        detail = web_outlook_app.build_folder_failure_detail(result)
+
+        self.assertEqual(detail['code'], 'EMAIL_FETCH_TIMEOUT')
+        self.assertEqual(detail['message'], '获取邮件超时，请稍后重试')
+        self.assertEqual(detail['status'], 504)
+        self.assertEqual(detail['details']['graph']['message'], 'should not override')
+
     def test_get_email_detail_imap_defaults_to_uid_fetch(self):
         message = EmailMessage()
         message['Subject'] = 'Default UID detail'
@@ -709,8 +834,11 @@ class ImapFolderResolutionTests(unittest.TestCase):
                 return 'BYE', [b'logout']
 
         mail = DetailMail()
-        with patch.object(web_outlook_app, 'get_access_token_imap', return_value='access-token'), \
-             patch.object(web_outlook_app.imaplib, 'IMAP4_SSL', return_value=mail):
+        with patch.object(
+            web_outlook_app,
+            'get_access_token_imap_result',
+            return_value={'success': True, 'access_token': 'access-token'},
+        ), patch.object(web_outlook_app.imaplib, 'IMAP4_SSL', return_value=mail):
             detail = web_outlook_app.get_email_detail_imap(
                 'reader@example.com',
                 'client-id',
@@ -810,6 +938,14 @@ class ExternalAccountsApiTests(unittest.TestCase):
             self.assertIsNotNone(channel_id)
             return channel_id
 
+    def assert_db_execute_called_with_params(self, db_mock, expected_params):
+        execute_params = [
+            call.args[1]
+            for call in db_mock.return_value.execute.call_args_list
+            if len(call.args) > 1
+        ]
+        self.assertIn(expected_params, execute_params)
+
     def test_global_refresh_logs_clamps_invalid_and_large_pagination(self):
         with self.client.session_transaction() as session:
             session['logged_in'] = True
@@ -841,8 +977,10 @@ class ExternalAccountsApiTests(unittest.TestCase):
         ), patch.object(web_outlook_app, 'get_db') as db_mock:
             db_mock.return_value.execute.return_value.fetchall.return_value = []
             self.client.get('/api/accounts/refresh-logs?limit=999999&offset=-5')
-        execute_args = db_mock.return_value.execute.call_args.args
-        self.assertEqual(execute_args[1], (web_outlook_app.LOG_PAGINATION_MAX_LIMIT, 0))
+        self.assert_db_execute_called_with_params(
+            db_mock,
+            (web_outlook_app.LOG_PAGINATION_MAX_LIMIT, 0),
+        )
 
     def test_refresh_logs_prefer_current_account_email_over_log_email(self):
         with self.client.session_transaction() as session:
@@ -925,8 +1063,10 @@ class ExternalAccountsApiTests(unittest.TestCase):
         ), patch.object(web_outlook_app, 'get_db') as db_mock:
             db_mock.return_value.execute.return_value.fetchall.return_value = []
             self.client.get(f'/api/accounts/{self.account_id}/refresh-logs?limit=999999&offset=-5')
-        execute_args = db_mock.return_value.execute.call_args.args
-        self.assertEqual(execute_args[1], (self.account_id, web_outlook_app.LOG_PAGINATION_MAX_LIMIT, 0))
+        self.assert_db_execute_called_with_params(
+            db_mock,
+            (self.account_id, web_outlook_app.LOG_PAGINATION_MAX_LIMIT, 0),
+        )
 
     def test_failed_refresh_logs_keep_json_shape_with_ignored_pagination_inputs(self):
         with self.client.session_transaction() as session:
@@ -983,8 +1123,10 @@ class ExternalAccountsApiTests(unittest.TestCase):
         ), patch.object(web_outlook_app, 'get_db') as db_mock:
             db_mock.return_value.execute.return_value.fetchall.return_value = []
             self.client.get('/api/accounts/forwarding-logs?limit=999999&offset=-5')
-        execute_args = db_mock.return_value.execute.call_args.args
-        self.assertEqual(execute_args[1], (web_outlook_app.LOG_PAGINATION_MAX_LIMIT, 0))
+        self.assert_db_execute_called_with_params(
+            db_mock,
+            (web_outlook_app.LOG_PAGINATION_MAX_LIMIT, 0),
+        )
 
     def test_failed_forwarding_logs_clamps_invalid_and_large_pagination(self):
         with self.client.session_transaction() as session:
@@ -1002,8 +1144,10 @@ class ExternalAccountsApiTests(unittest.TestCase):
         ), patch.object(web_outlook_app, 'get_db') as db_mock:
             db_mock.return_value.execute.return_value.fetchall.return_value = []
             self.client.get('/api/accounts/forwarding-logs/failed?limit=999999&offset=-5')
-        execute_args = db_mock.return_value.execute.call_args.args
-        self.assertEqual(execute_args[1], (web_outlook_app.LOG_PAGINATION_MAX_LIMIT, 0))
+        self.assert_db_execute_called_with_params(
+            db_mock,
+            (web_outlook_app.LOG_PAGINATION_MAX_LIMIT, 0),
+        )
 
     def test_account_forwarding_logs_clamps_and_filters_by_account(self):
         with self.client.session_transaction() as session:
@@ -1057,8 +1201,10 @@ class ExternalAccountsApiTests(unittest.TestCase):
                 'forward_last_checked_at': '',
             }):
                 self.client.get(f'/api/accounts/{self.account_id}/forwarding-logs?limit=999999&offset=-5')
-        execute_args = db_mock.return_value.execute.call_args.args
-        self.assertEqual(execute_args[1], (self.account_id, web_outlook_app.LOG_PAGINATION_MAX_LIMIT, 0))
+        self.assert_db_execute_called_with_params(
+            db_mock,
+            (self.account_id, web_outlook_app.LOG_PAGINATION_MAX_LIMIT, 0),
+        )
 
     def test_external_accounts_requires_api_key(self):
         response = self.client.get('/api/external/accounts')
@@ -3686,6 +3832,268 @@ class MultiChannelForwardingTests(unittest.TestCase):
         self.assertEqual(attachments[0]['name'], 'report.txt')
         self.assertEqual(attachments[0]['content_type'], 'text/plain')
         self.assertEqual(attachments[0]['content'], b'hello attachment')
+
+class MailFetchErrorPayloadTests(unittest.TestCase):
+    def test_proxy_failure_is_classified_with_actionable_reason(self):
+        error = web_outlook_app.requests.exceptions.ProxyError(
+            'HTTPSConnectionPool(host="graph.microsoft.com", port=443): '
+            'Unable to connect to proxy'
+        )
+        error.proxy_failures = [
+            {'candidate': 'primary', 'type': 'ProxyError', 'details': 'Unable to connect to proxy'},
+            {'candidate': 'fallback1', 'type': 'ConnectTimeout', 'details': 'timed out'},
+        ]
+
+        payload = web_outlook_app.build_mail_fetch_error(
+            error,
+            proxy_url='http://proxy.example:8080',
+            operation='获取邮件',
+        )
+
+        self.assertEqual(payload['code'], 'MAIL_PROXY_FAILED')
+        self.assertEqual(payload['category'], 'proxy')
+        self.assertIn('代理', payload['message'])
+        self.assertIn('Unable to connect to proxy', payload['details'])
+        self.assertIn('proxy_attempts', payload['details'])
+
+    def test_proxy_failure_details_redact_proxy_url_credentials(self):
+        error = web_outlook_app.requests.exceptions.ProxyError(
+            'Unable to connect to http://proxy-user:proxy-pass@proxy.example:8080'
+        )
+
+        payload = web_outlook_app.build_mail_fetch_error(
+            error,
+            proxy_url='http://proxy-user:proxy-pass@proxy.example:8080',
+        )
+
+        self.assertNotIn('proxy-user', payload['details'])
+        self.assertNotIn('proxy-pass', payload['details'])
+        self.assertIn('http://***:***@proxy.example:8080', payload['details'])
+
+    def test_timeout_is_classified_as_network_timeout(self):
+        error = web_outlook_app.requests.exceptions.ConnectTimeout('Connection timed out')
+
+        payload = web_outlook_app.build_mail_fetch_error(error, operation='获取邮件')
+
+        self.assertEqual(payload['code'], 'MAIL_NETWORK_TIMEOUT')
+        self.assertEqual(payload['category'], 'network')
+        self.assertIn('超时', payload['message'])
+
+    def test_dns_and_tls_failures_have_distinct_error_codes(self):
+        cases = (
+            (
+                web_outlook_app.requests.exceptions.ConnectionError('Name or service not known'),
+                'MAIL_NETWORK_FAILED',
+            ),
+            (
+                web_outlook_app.requests.exceptions.SSLError('certificate verify failed'),
+                'MAIL_TLS_FAILED',
+            ),
+        )
+
+        for error, expected_code in cases:
+            with self.subTest(expected_code=expected_code):
+                payload = web_outlook_app.build_mail_fetch_error(error, operation='获取邮件')
+                self.assertEqual(payload['code'], expected_code)
+                self.assertEqual(payload['category'], 'network')
+
+    def test_proxy_failure_details_reach_account_mail_response(self):
+        error = web_outlook_app.requests.exceptions.ProxyError('Unable to connect to proxy')
+        error_payload = web_outlook_app.build_mail_fetch_error(
+            error,
+            proxy_url='http://proxy.example:8080',
+        )
+        account = {
+            'email': 'user@outlook.com',
+            'account_type': 'outlook',
+            'client_id': 'client-id',
+            'refresh_token': 'refresh-token',
+        }
+
+        with patch.object(
+            web_outlook_app,
+            'get_emails_graph',
+            return_value={'success': False, 'error': error_payload},
+        ), patch.object(web_outlook_app, 'get_emails_imap_with_server') as imap_mock:
+            result = web_outlook_app.fetch_account_folder_emails(
+                account,
+                'inbox',
+                0,
+                20,
+                'http://proxy.example:8080',
+                [],
+            )
+
+        self.assertFalse(result['success'])
+        self.assertEqual(result['error'], error_payload['message'])
+        self.assertEqual(result['details']['graph']['code'], 'MAIL_PROXY_FAILED')
+        imap_mock.assert_not_called()
+
+    def test_tls_failure_keeps_imap_fallback_available(self):
+        tls_error = web_outlook_app.build_mail_fetch_error(
+            web_outlook_app.requests.exceptions.SSLError('certificate verify failed'),
+            operation='获取邮件',
+        )
+        account = {
+            'email': 'user@outlook.com',
+            'account_type': 'outlook',
+            'client_id': 'client-id',
+            'refresh_token': 'refresh-token',
+        }
+
+        with patch.object(
+            web_outlook_app,
+            'get_emails_graph',
+            return_value={'success': False, 'error': tls_error},
+        ), patch.object(
+            web_outlook_app,
+            'get_emails_imap_with_server',
+            return_value={'success': True, 'emails': [], 'has_more': False},
+        ) as imap_mock:
+            result = web_outlook_app.fetch_account_folder_emails(
+                account,
+                'inbox',
+                0,
+                20,
+                '',
+                [],
+            )
+
+        self.assertTrue(result['success'])
+        self.assertEqual(result['method'], 'IMAP (New)')
+        imap_mock.assert_called_once()
+
+    def test_graph_token_transport_error_preserves_legacy_code(self):
+        error = web_outlook_app.requests.exceptions.ConnectTimeout('Connection timed out')
+
+        with patch.object(web_outlook_app, 'request_graph_token_response', side_effect=error):
+            result = web_outlook_app.get_access_token_graph_result(
+                'client-id',
+                'refresh-token',
+            )
+
+        self.assertFalse(result['success'])
+        self.assertEqual(result['error']['code'], 'GRAPH_TOKEN_EXCEPTION')
+        self.assertEqual(result['error']['reason_code'], 'MAIL_NETWORK_TIMEOUT')
+        self.assertEqual(result['error']['status'], 500)
+
+    def test_mail_fetch_call_sites_preserve_legacy_codes(self):
+        cases = (
+            (
+                'graph_mail',
+                'EMAIL_FETCH_FAILED',
+                'MAIL_TLS_FAILED',
+            ),
+            (
+                'imap_token',
+                'IMAP_TOKEN_EXCEPTION',
+                'MAIL_NETWORK_TIMEOUT',
+            ),
+            (
+                'imap_mail',
+                'EMAIL_FETCH_FAILED',
+                'MAIL_NETWORK_FAILED',
+            ),
+        )
+
+        for scenario, legacy_code, reason_code in cases:
+            with self.subTest(scenario=scenario):
+                if scenario == 'graph_mail':
+                    with patch.object(
+                        web_outlook_app,
+                        'get_access_token_graph_result',
+                        return_value={'success': True, 'access_token': 'token'},
+                    ), patch.object(
+                        web_outlook_app,
+                        'get_with_proxy_fallback',
+                        side_effect=web_outlook_app.requests.exceptions.SSLError(
+                            'certificate verify failed'
+                        ),
+                    ):
+                        result = web_outlook_app.get_emails_graph(
+                            'client-id',
+                            'refresh-token',
+                        )
+                elif scenario == 'imap_token':
+                    with patch.object(
+                        web_outlook_app,
+                        'request_imap_token_response',
+                        side_effect=web_outlook_app.requests.exceptions.ConnectTimeout(
+                            'Connection timed out'
+                        ),
+                    ):
+                        result = web_outlook_app.get_access_token_imap_result(
+                            'client-id',
+                            'refresh-token',
+                        )
+                else:
+                    with patch.object(
+                        web_outlook_app,
+                        'get_access_token_imap_result',
+                        return_value={'success': True, 'access_token': 'token'},
+                    ), patch.object(
+                        web_outlook_app.imaplib,
+                        'IMAP4_SSL',
+                        side_effect=ConnectionError('connection refused'),
+                    ):
+                        result = web_outlook_app.get_emails_imap_with_server(
+                            'user@outlook.com',
+                            'client-id',
+                            'refresh-token',
+                        )
+
+                self.assertFalse(result['success'])
+                self.assertEqual(result['error']['code'], legacy_code)
+                self.assertEqual(result['error']['reason_code'], reason_code)
+                self.assertEqual(result['error']['status'], 500)
+
+    def test_direct_fallback_failure_is_reported_as_network_not_proxy(self):
+        proxy_error = web_outlook_app.requests.exceptions.ProxyError(
+            'Unable to connect to proxy'
+        )
+        direct_error = web_outlook_app.requests.exceptions.ConnectTimeout(
+            'Connection timed out'
+        )
+
+        with patch.object(
+            web_outlook_app.requests,
+            'request',
+            side_effect=[proxy_error, direct_error],
+        ):
+            with self.assertRaises(web_outlook_app.requests.exceptions.ConnectTimeout) as raised:
+                web_outlook_app.request_with_proxy_failover(
+                    'get',
+                    'https://graph.microsoft.com/v1.0/me/messages',
+                    proxy_url='http://proxy.example:8080',
+                    fallback_proxy_urls=['direct'],
+                )
+
+        payload = web_outlook_app.build_mail_fetch_error(
+            raised.exception,
+            proxy_url='http://proxy.example:8080',
+        )
+        self.assertEqual(payload['code'], 'MAIL_NETWORK_TIMEOUT')
+        self.assertEqual(payload['category'], 'network')
+        self.assertIn('"candidate": "primary"', payload['details'])
+        self.assertIn('"candidate": "fallback1"', payload['details'])
+
+    def test_generic_imap_transport_error_keeps_error_codes_consistent(self):
+        with patch.object(
+            web_outlook_app,
+            'create_imap_connection',
+            side_effect=ConnectionError('connection refused'),
+        ):
+            result = web_outlook_app.get_emails_imap_generic(
+                'user@example.com',
+                'password',
+                'imap.example.com',
+            )
+
+        self.assertFalse(result['success'])
+        self.assertEqual(result['error_code'], 'IMAP_CONNECT_FAILED')
+        self.assertEqual(result['error']['code'], result['error_code'])
+        self.assertEqual(result['error']['reason_code'], 'MAIL_NETWORK_FAILED')
+        self.assertEqual(result['error']['status'], 502)
 
 
 if __name__ == '__main__':

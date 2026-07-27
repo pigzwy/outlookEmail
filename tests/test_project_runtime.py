@@ -2135,8 +2135,10 @@ class FrontendEmailListSecurityTests(unittest.TestCase):
 
     def test_detail_load_error_message_is_rendered_as_text(self):
         self.assertNotIn("${data.error && data.error.message ? data.error.message : '加载失败'}", self.emails_js)
+        self.assertIn("const detailErrorMessage = data.error?.message", self.emails_js)
+        self.assertIn("|| (typeof data.error === 'string' ? data.error : '')", self.emails_js)
         self.assertIn("const errorText = container.querySelector('.empty-state-text');", self.emails_js)
-        self.assertIn("errorText.textContent = data.error && data.error.message ? data.error.message : '加载失败';", self.emails_js)
+        self.assertIn("errorText.textContent = detailErrorMessage;", self.emails_js)
 
     def test_delete_emails_removes_matching_cached_rows_and_preserves_unrelated_detail(self):
         self.assertIn('function removeDeletedEmailsFromCachedLists(deletedIds, account = currentAccount)', self.emails_js)
@@ -2687,6 +2689,30 @@ class FrontendTimezoneBootstrapTests(unittest.TestCase):
         self.assertIn('.refresh-account-select-checkbox', modal_css)
         self.assertIn('.refresh-filter-chip', modal_css)
         self.assertNotIn('.refresh-progress-banner', modal_css)
+
+
+class FrontendMailFetchErrorTests(unittest.TestCase):
+    def test_remote_mail_failures_keep_details_for_background_and_browser_errors(self):
+        emails_js = pathlib.Path(ROOT_DIR, 'static', 'js', 'index', '05-emails.js').read_text(encoding='utf-8')
+
+        self.assertIn('showBackgroundMailFetchErrorModal(options.context, fetchErrorDetails);', emails_js)
+        self.assertIn('showBackgroundMailFetchErrorModal(context, { browser: browserError });', emails_js)
+        self.assertIn('errorMessage = getFetchErrorMessage(error)', emails_js)
+
+    def test_background_mail_error_modal_is_deduplicated_with_a_cooldown(self):
+        emails_js = pathlib.Path(ROOT_DIR, 'static', 'js', 'index', '05-emails.js').read_text(encoding='utf-8')
+
+        self.assertIn('const BACKGROUND_MAIL_ERROR_MODAL_COOLDOWN_MS = 5 * 60 * 1000;', emails_js)
+        self.assertIn('function showBackgroundMailFetchErrorModal(context, details)', emails_js)
+        self.assertIn('now - lastBackgroundMailErrorModal.shownAt < BACKGROUND_MAIL_ERROR_MODAL_COOLDOWN_MS', emails_js)
+
+    def test_mail_error_modal_translates_proxy_and_network_scenarios(self):
+        core_js = pathlib.Path(ROOT_DIR, 'static', 'js', 'index', '01-core.js').read_text(encoding='utf-8')
+
+        self.assertIn('const reasonCode = err.reason_code || code;', core_js)
+        self.assertIn("reasonCode === 'MAIL_PROXY_FAILED'", core_js)
+        self.assertIn("reasonCode === 'MAIL_NETWORK_TIMEOUT'", core_js)
+        self.assertIn("reasonCode === 'MAIL_NETWORK_FAILED'", core_js)
 
 
 class DesktopPackagedRuntimeTests(unittest.TestCase):

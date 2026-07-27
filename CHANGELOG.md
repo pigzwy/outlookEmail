@@ -6,7 +6,54 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [2.8.10] - 2026-07-26
+
+### Changed
+- Outlook 上传账号管理端分页档位调整为 `10` / `20` / `50` / `100`，默认 `20`（与 API 默认对齐）；本地记忆的非法旧档位会回落到默认值。
+- 「添加新账号」表单改为单行布局，授权弹窗加宽并微调表格列宽；使用说明默认折叠。
+- 标签筛选弹窗宽度从 `320px` 调整为 `250px`。
+
+### Fixed
+- 修复添加账号面板中标签下拉弹窗被父级 `overflow: hidden` 裁切的问题。
+
+## [2.8.9] - 2026-07-25
+
+### Fixed
+- 修复 Outlook 邮件详情失败时错误细节丢失：Graph / OAuth IMAP 详情改为返回结构化错误（code / type / status / details / trace_id），Graph 失败回退 IMAP 时透传各协议尝试结果，避免接口 HTTP 200 但页面只显示「加载失败」。
+- 邮件详情前端兼容 `error` 为字符串或对象，并在存在协议级 `details` 时提供「点击查看详情」入口，复用列表侧失败弹窗。
+
+### Changed
+- Outlook OAuth IMAP 详情对代理 / 超时 / 连接等传输类错误自动有限重试 1 次（认证失败、文件夹不存在、token 失效等不重试），降低间歇性读信失败概率。
+
+## [2.8.8] - 2026-07-23
+
+### Fixed
+- 修复「全部邮件」拉取失败时错误细节丢失：`merge_folder_results` 现在会透传 Graph / IMAP 各协议的结构化错误（code / type / status / trace_id / details），避免弹窗只显示「无法获取邮件，所有方式均失败」且字段全为 `-`。
+- 邮件获取失败详情弹窗支持按文件夹展开协议级错误（如「收件箱 / Graph API」「收件箱 / IMAP（新服务器）」），便于排查 token 刷新成功但读信失败等问题。
+
+## [2.8.7] - 2026-07-19
+
+### Changed
+- 分组代理、账号代理、批量代理与上传账号代理界面补充 SOCKS5 建议提示：IMAP 令牌请求仅支持 HTTPS CONNECT / SOCKS5 代理，普通 HTTP 代理不可用；placeholder 优先展示 `socks5://` 示例。
+
+## [2.8.6] - 2026-07-19
+
+### Added
+- Telegram 转发支持可选 Topic ID（`telegram_topic_id` / `message_thread_id`），可将消息发到话题群组指定话题；不填写时行为与原来一致。
+- Outlook 上传账号列表支持按授权状态筛选（全部 / 未授权 / 已授权），并与关键词搜索组合过滤。
+- 上传账号管理表格新增「账号代理」列，展示脱敏后的代理地址（去除凭据、路径与查询参数）。
+- 上传账号分页提供 `100` / `200` / `500` / `1000` 档位，管理端默认 `200` 并本地记忆偏好。
+
+### Changed
+- `GET /api/outlook-upload-accounts` 支持 `auth_status`；`page_size` 最大提升至 `1000`；列表序列化返回脱敏后的 `proxy_url`。
+- 邮件获取错误响应补充 `reason_code`、`category`、`proxy_configured`、`retryable` 等字段，前端可更清晰展示网络 / 代理 / TLS 等原因。
+
+### Fixed
+- 完善 IMAP / 邮件获取错误分类与用户提示，避免笼统失败信息。
+- 上传账号列表并发请求仅应用最新响应，避免旧分页结果覆盖当前筛选结果。
+
 ## [2.8.5] - 2026-07-14
+
 
 ### Added
 - Outlook 上传账号支持设置目标分组、标签与账号代理；Graph 授权成功并**新建**正式账号时自动写入。

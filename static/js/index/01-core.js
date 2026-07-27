@@ -2109,6 +2109,60 @@
             return err;
         }
 
+        function resolveFetchErrorMethodName(method, methodNames) {
+            if (methodNames[method]) return methodNames[method];
+            if (typeof method === 'string' && method.includes('.')) {
+                return method
+                    .split('.')
+                    .map((part) => methodNames[part] || part)
+                    .join(' / ');
+            }
+            return method;
+        }
+
+        function expandFolderProtocolFetchErrors(details) {
+            if (!details || typeof details !== 'object' || Array.isArray(details)) {
+                return details;
+            }
+            if (details.message && details.code) {
+                return details;
+            }
+
+            const protocolKeys = ['graph', 'imap_new', 'imap_old', 'imap_generic', 'browser'];
+            const hasTopLevelProtocol = protocolKeys.some((key) => details[key] !== undefined);
+            if (hasTopLevelProtocol) {
+                return details;
+            }
+
+            const expanded = {};
+            Object.keys(details).forEach((key) => {
+                const err = normalizeMethodError(details[key]);
+                const nested = err && typeof err === 'object'
+                    ? parseJsonLike(err.details)
+                    : null;
+                const nestedProtocols = (nested && typeof nested === 'object' && !Array.isArray(nested))
+                    ? protocolKeys.filter((protocolKey) => nested[protocolKey] !== undefined)
+                    : [];
+
+                if (nestedProtocols.length > 0) {
+                    nestedProtocols.forEach((protocolKey) => {
+                        expanded[`${key}.${protocolKey}`] = nested[protocolKey];
+                    });
+                    if (err && typeof err === 'object') {
+                        const summary = { ...err };
+                        delete summary.details;
+                        expanded[key] = summary;
+                    } else {
+                        expanded[key] = err;
+                    }
+                    return;
+                }
+
+                expanded[key] = details[key];
+            });
+            return expanded;
+        }
+
         // 显示统一错误详情模态框
         function showErrorDetailModal(error) {
             showModal('errorDetailModal');
@@ -2143,6 +2197,7 @@
                 'imap_new': 'IMAP（新服务器）',
                 'imap_old': 'IMAP（旧服务器）',
                 'imap_generic': '标准 IMAP',
+                'browser': '浏览器到服务端',
                 'inbox': '收件箱',
                 'junkemail': '垃圾邮件',
                 'deleteditems': '已删除邮件',
@@ -2155,10 +2210,23 @@
                 if (typeof err === 'string') return err;
 
                 const code = err.code || '';
+                const reasonCode = err.reason_code || code;
                 const details = formatFetchErrorDetails(err.details);
                 const msg = err.message || '';
 
                 // 翻译常见错误
+                if (reasonCode === 'MAIL_PROXY_FAILED') {
+                    return msg || '代理连接失败：请检查代理地址、端口、认证信息和回退代理设置';
+                }
+                if (reasonCode === 'MAIL_NETWORK_TIMEOUT' || code === 'EMAIL_FETCH_TIMEOUT') {
+                    return msg || '网络连接超时：请检查网络、代理和邮件服务地址';
+                }
+                if (reasonCode === 'MAIL_NETWORK_FAILED') {
+                    return msg || '网络连接失败：请检查 DNS、防火墙、代理和邮件服务地址';
+                }
+                if (reasonCode === 'MAIL_TLS_FAILED') {
+                    return msg || 'TLS/SSL 连接失败：请检查邮件服务地址、端口和系统证书';
+                }
                 if (code === 'GRAPH_TOKEN_EXCEPTION' && details.includes('ProxyError')) {
                     return '代理连接失败：无法连接到代理服务器，请检查代理地址是否正确以及代理是否在运行';
                 }
@@ -2192,13 +2260,16 @@
                 return msg || details || '未知错误';
             }
 
-            const detailEntries = (typeof details === 'object' && !Array.isArray(details) && !(details.message && details.code))
-                ? details
-                : { error: details };
-            const preferredOrder = ['graph', 'imap_new', 'imap_old', 'imap_generic', 'inbox', 'junkemail', 'deleteditems', 'all', 'error'];
+            const expandedDetails = expandFolderProtocolFetchErrors(details);
+            const detailEntries = (typeof expandedDetails === 'object' && !Array.isArray(expandedDetails) && !(expandedDetails.message && expandedDetails.code))
+                ? expandedDetails
+                : { error: expandedDetails };
+            const preferredOrder = ['browser', 'graph', 'imap_new', 'imap_old', 'imap_generic', 'inbox', 'junkemail', 'deleteditems', 'all', 'error'];
             const methods = [
                 ...preferredOrder.filter(method => detailEntries[method] !== undefined),
-                ...Object.keys(detailEntries).filter(method => !preferredOrder.includes(method))
+                ...Object.keys(detailEntries)
+                    .filter(method => !preferredOrder.includes(method))
+                    .sort((left, right) => String(left).localeCompare(String(right)))
             ];
 
             const summaryEl = document.getElementById('emailFetchErrorSummary');
@@ -2212,7 +2283,7 @@
             methods.forEach(method => {
                 const err = normalizeMethodError(detailEntries[method]);
                 if (err !== undefined) {
-                    const name = methodNames[method] || method;
+                    const name = resolveFetchErrorMethodName(method, methodNames);
                     const reason = translateError(err);
                     const codeText = (err && typeof err === 'object') ? (err.code || '-') : '-';
                     const typeText = (err && typeof err === 'object') ? (err.type || '-') : '-';
@@ -2223,13 +2294,13 @@
                         : formatFetchErrorDetails(detailEntries[method]);
                     html += `
                         <div style="background: #fff5f5; border: 1px solid #fde2e2; border-radius: 8px; padding: 14px 16px; margin-bottom: 12px;">
-                            <div style="font-weight: 600; color: #dc3545; margin-bottom: 6px; font-size: 14px;">${name}</div>
-                            <div style="color: #333; font-size: 13px; line-height: 1.6;">${reason}</div>
+                            <div style="font-weight: 600; color: #dc3545; margin-bottom: 6px; font-size: 14px;">${escapeHtml(name)}</div>
+                            <div style="color: #333; font-size: 13px; line-height: 1.6;">${escapeHtml(reason)}</div>
                             <div style="color: #999; font-size: 12px; margin-top: 6px; line-height: 1.6;">
-                                错误代码: ${escapeHtml(codeText)}<br>
-                                类型: ${escapeHtml(typeText)}<br>
-                                状态码: ${escapeHtml(statusText)}<br>
-                                Trace ID: ${escapeHtml(traceIdText)}
+                                错误代码: ${escapeHtml(String(codeText))}<br>
+                                类型: ${escapeHtml(String(typeText))}<br>
+                                状态码: ${escapeHtml(String(statusText))}<br>
+                                Trace ID: ${escapeHtml(String(traceIdText))}
                             </div>
                             ${detailText ? `<pre style="margin-top:10px; padding:10px 12px; background:#fff; border:1px solid #f3caca; border-radius:6px; color:#444; font-size:12px; line-height:1.5; white-space:pre-wrap; word-break:break-word; max-height:240px; overflow:auto;">${escapeHtml(detailText)}</pre>` : ''}
                         </div>

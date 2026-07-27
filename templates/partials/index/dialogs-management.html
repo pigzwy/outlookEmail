@@ -541,6 +541,11 @@
                                         <label class="form-label">Telegram Chat ID</label>
                                         <input type="text" class="form-input" id="settingsTelegramChatId" placeholder="-1001234567890">
                                     </div>
+                                    <div class="form-group forward-field">
+                                        <label class="form-label">Telegram Topic ID</label>
+                                        <input type="text" class="form-input" id="settingsTelegramTopicId" placeholder="123">
+                                        <div class="form-hint">可选。群组开启话题（Topics）后，填写话题 ID 可将消息发送到指定话题。</div>
+                                    </div>
                                     <div class="form-group forward-field forward-field--full">
                                         <label class="form-label">Telegram 代理</label>
                                         <input type="text" class="form-input" id="settingsTelegramProxyUrl" placeholder="http://host:port、socks5://host:port 或 direct">
@@ -958,8 +963,8 @@
                 <div class="form-group">
                     <label class="form-label">账号代理</label>
                     <input type="text" class="form-input" id="batchProxyUrl"
-                        placeholder="http://host:port、socks5://host:port 或 direct">
-                    <div class="form-hint">应用到已勾选账号；留空并提交会清空账号级代理，改为继承分组代理。</div>
+                        placeholder="socks5://host:port、http://host:port 或 direct">
+                    <div class="form-hint">应用到已勾选账号；留空并提交会清空账号级代理，改为继承分组代理。建议优先使用 <code>socks5://</code>：IMAP 令牌请求仅支持 HTTPS CONNECT / SOCKS5 代理，普通 HTTP 代理不可用。</div>
                 </div>
                 <div class="form-group">
                     <label class="form-label">回退代理 1</label>
@@ -1148,14 +1153,14 @@
 
     <!-- Outlook 上传账号模态框 -->
     <div class="modal" id="outlookUploadAccountsModal" onmousedown="if(event.target === this) hideOutlookUploadAccountsModal()">
-        <div class="modal-content" style="width: min(1500px, 96vw);">
+        <div class="modal-content" style="width: min(1740px, 96vw);">
             <div class="modal-header">
                 <h3>Outlook邮箱授权</h3>
                 <button class="modal-close" onclick="hideOutlookUploadAccountsModal()">&times;</button>
             </div>
             <div class="modal-body">
                 <div class="upload-accounts-guide">
-                    <details class="upload-accounts-guide__details" open>
+                    <details class="upload-accounts-guide__details">
                         <summary class="upload-accounts-guide__summary">
                             找不到批量导入？四种添加 / 授权方式说明（入口与区别）
                         </summary>
@@ -1261,7 +1266,7 @@
                                     </div>
                                 </div>
                                 <div class="form-hint" style="margin-top: 8px;">
-                                    分组 / 标签 / 账号代理会在<strong>首次授权成功并新建正式账号</strong>时写入；若正式账号已存在则仅更新授权信息，保留原分组/标签/代理。
+                                    分组 / 标签 / 账号代理会在<strong>首次授权成功并新建正式账号</strong>时写入；若正式账号已存在则仅更新授权信息，保留原分组/标签/代理。建议优先使用 <code>socks5://</code>：IMAP 令牌请求仅支持 HTTPS CONNECT / SOCKS5 代理，普通 HTTP 代理不可用。
                                 </div>
                             </div>
                         </div>
@@ -1269,6 +1274,12 @@
                             <input type="text" id="uploadAccountsSearch" class="form-input upload-accounts-search"
                                 placeholder="搜索邮箱 / 备注" autocomplete="off"
                                 onkeydown="if(event.key==='Enter'){event.preventDefault();searchUploadAccounts();}">
+                            <select id="uploadAccountsAuthStatusFilter" class="form-input upload-accounts-toolbar__select"
+                                aria-label="授权状态" onchange="handleUploadAccountsAuthStatusChange(this.value)">
+                                <option value="all">全部</option>
+                                <option value="unauthorized">未授权</option>
+                                <option value="authorized">已授权</option>
+                            </select>
                             <button class="btn btn-secondary" type="button" onclick="searchUploadAccounts()">搜索</button>
                             <button class="btn btn-secondary" type="button" onclick="reloadUploadAccounts()">刷新</button>
                         </div>
@@ -1291,17 +1302,18 @@
                                                 onchange="toggleSelectVisibleUploadAccounts(this.checked)">
                                         </th>
                                         <th style="width: 200px; min-width: 160px;">邮箱</th>
-                                        <th style="width: 80px; min-width: 70px;">密码</th>
+                                        <th style="width: 160px; min-width: 100px;">密码</th>
                                         <th style="width: 72px; min-width: 72px;">授权</th>
-                                        <th style="width: 120px; min-width: 100px;">标签</th>
-                                        <th style="width: 100px; min-width: 80px;">备注</th>
+                                        <th style="width: 160px; min-width: 100px;">标签</th>
+                                        <th style="width: 160px; min-width: 160px;">账号代理</th>
+                                        <th style="width: 80px; min-width: 80px;">备注</th>
                                         <th style="width: 130px; min-width: 120px;">创建时间</th>
                                         <th style="width: 210px; min-width: 210px;">操作</th>
                                     </tr>
                                 </thead>
                                 <tbody id="uploadAccountsTableBody">
                                     <tr>
-                                        <td colspan="8" class="upload-accounts-empty">正在加载...</td>
+                                        <td colspan="9" class="upload-accounts-empty">正在加载...</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -1309,6 +1321,13 @@
                         <div class="upload-accounts-pagination">
                             <span class="upload-accounts-pagination__info" id="uploadAccountsPageInfo">共 0 条</span>
                             <div class="upload-accounts-pagination__controls">
+                                <select id="uploadAccountsPageSizeSelect" class="form-input upload-accounts-pagination__select"
+                                    aria-label="每页数量" onchange="handleUploadAccountsPageSizeChange(this.value)">
+                                    <option value="10">每页 10</option>
+                                    <option value="20" selected>每页 20</option>
+                                    <option value="50">每页 50</option>
+                                    <option value="100">每页 100</option>
+                                </select>
                                 <button class="btn btn-secondary" type="button" id="uploadAccountsPrevBtn"
                                     onclick="changeUploadAccountsPage(-1)">上一页</button>
                                 <span class="upload-accounts-pagination__page" id="uploadAccountsPageText">第 1 / 1 页</span>
@@ -1555,6 +1574,10 @@
             flex: 1;
             min-width: 180px;
         }
+        .upload-accounts-toolbar__select {
+            width: auto;
+            min-width: 112px;
+        }
         .upload-accounts-table-wrap {
             min-height: 410px;
             overflow-x: auto;
@@ -1563,7 +1586,7 @@
         }
         .upload-accounts-table {
             width: 100%;
-            min-width: 912px;
+            min-width: 1092px;
             border-collapse: collapse;
             table-layout: fixed;
             font-size: 13px;
@@ -1642,6 +1665,13 @@
         .upload-accounts-tag-pill.account-status-pill.tag:hover {
             padding-right: 10px;
         }
+        .upload-accounts-proxy {
+            display: inline-block;
+            max-width: 156px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            vertical-align: middle;
+        }
         .upload-accounts-pagination {
             display: flex;
             justify-content: space-between;
@@ -1674,7 +1704,7 @@
             border: 1px solid var(--skin-border, #e5e7eb);
             border-radius: 8px;
             background: var(--skin-surface, #ffffff);
-            overflow: hidden;
+            overflow: visible;
         }
         .upload-accounts-add-panel__header {
             display: flex;
@@ -1712,7 +1742,7 @@
         }
         .upload-accounts-add-form {
             display: grid;
-            grid-template-columns: 1fr 140px 1fr 1fr;
+            grid-template-columns: 180px 120px 180px 150px 120px 120px 250px auto;
             gap: 12px;
             align-items: end;
         }
@@ -1739,8 +1769,6 @@
             height: 36px;
         }
         .add-form-field--action {
-            grid-column: 1 / -1;
-            padding-top: 0;
             align-items: stretch;
         }
         .add-form-submit {

@@ -639,6 +639,7 @@ def api_get_settings():
     settings['smtp_use_ssl'] = get_setting('smtp_use_ssl', 'true')
     settings['telegram_bot_token'] = get_setting_decrypted('telegram_bot_token', '')
     settings['telegram_chat_id'] = get_setting('telegram_chat_id', '')
+    settings['telegram_topic_id'] = get_setting('telegram_topic_id', '')
     settings['telegram_proxy_url'] = get_setting('telegram_proxy_url', '')
     settings['wecom_webhook_url'] = get_setting_decrypted('wecom_webhook_url', '')
     settings['webdav_backup_enabled'] = get_setting('webdav_backup_enabled', 'false')
@@ -1125,6 +1126,12 @@ def api_update_settings():
         else:
             errors.append('保存 Telegram Chat ID 失败')
 
+    if 'telegram_topic_id' in data:
+        if set_setting('telegram_topic_id', data['telegram_topic_id'].strip()):
+            updated.append('Telegram Topic ID')
+        else:
+            errors.append('保存 Telegram Topic ID 失败')
+
     if 'telegram_proxy_url' in data:
         if set_setting('telegram_proxy_url', data['telegram_proxy_url'].strip()):
             updated.append('Telegram 代理')
@@ -1401,9 +1408,19 @@ def api_external_upload_outlook():
 def api_list_outlook_upload_accounts():
     """分页查询外部上传的 Outlook 账号，供前端弹框表格展示。"""
     page = parse_non_negative_int(request.args.get('page', 1), 1) or 1
-    page_size = parse_non_negative_int(request.args.get('page_size', 20), 20, 200)
+    page_size = parse_non_negative_int(
+        request.args.get('page_size', UPLOAD_ACCOUNTS_API_DEFAULT_PAGE_SIZE),
+        UPLOAD_ACCOUNTS_API_DEFAULT_PAGE_SIZE,
+        UPLOAD_ACCOUNTS_MAX_PAGE_SIZE,
+    )
     keyword = str(request.args.get('keyword', '') or '').strip()
-    result = query_upload_accounts_page(page=page, page_size=page_size, keyword=keyword)
+    auth_status = str(request.args.get('auth_status', 'all') or 'all').strip().lower()
+    result = query_upload_accounts_page(
+        page=page,
+        page_size=page_size,
+        keyword=keyword,
+        auth_status=auth_status,
+    )
     return jsonify({'success': True, **result})
 
 

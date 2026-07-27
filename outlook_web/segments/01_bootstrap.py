@@ -1091,6 +1091,7 @@ def sanitize_error_details(details: Optional[str]) -> str:
         return ""
     sanitized = details
     patterns = [
+        (r'(?i)(\b(?:https?|socks4|socks5h?)://)[^/\s:@]+:[^@\s/]+@', r'\1***:***@'),
         (r'(?i)(bearer\s+)[A-Za-z0-9\-._~\+/]+=*', r'\1***'),
         (r'(?i)(refresh_token|access_token|token|password|passwd|secret)\s*[:=]\s*\"?[A-Za-z0-9\-._~\+/]+=*\"?', r'\1=***'),
         (r'(?i)(\"refresh_token\"\s*:\s*\")[^\"]+(\"?)', r'\1***\2'),
@@ -2164,6 +2165,10 @@ def init_db():
     cursor.execute('''
         INSERT OR IGNORE INTO settings (key, value)
         VALUES ('telegram_chat_id', '')
+    ''')
+    cursor.execute('''
+        INSERT OR IGNORE INTO settings (key, value)
+        VALUES ('telegram_topic_id', '')
     ''')
     cursor.execute('''
         INSERT OR IGNORE INTO settings (key, value)
