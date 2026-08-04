@@ -37,6 +37,7 @@ class FakeSession:
         self.post_responses = list(post_responses or [])
         self.headers = {}
         self.trust_env = False
+        self.proxies = {}
         self.get_calls = []
         self.post_calls = []
 
@@ -233,6 +234,11 @@ class GraphOauthRouteTests(unittest.TestCase):
             db.execute('DELETE FROM accounts')
             db.execute('DELETE FROM outlook_upload_accounts')
             db.execute("DELETE FROM groups WHERE name NOT IN ('默认分组', '临时邮箱')")
+            db.execute(
+                "UPDATE groups SET parent_id = NULL, level = 1, "
+                "proxy_url = '', fallback_proxy_url_1 = '', fallback_proxy_url_2 = '' "
+                "WHERE name IN ('默认分组', '临时邮箱')"
+            )
             db.commit()
 
     def _add_upload_account(self, email='upload@example.com', password='mail-password'):
@@ -257,7 +263,7 @@ class GraphOauthRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
         self.assertTrue(payload['success'], payload)
-        self.assertEqual(payload['mode'], mode if mode in ('imap', 'graph') else 'imap')
+        self.assertEqual(payload['mode'], mode if mode in ('imap', 'graph') else 'graph')
         self.assertIn('stream_url', payload)
         return payload['stream_url']
 
@@ -281,6 +287,29 @@ class GraphOauthRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertFalse(response.get_json()['success'])
 
+    def test_stream_passes_expanded_upload_proxy_to_extract_and_token_test(self):
+        with self.app.app_context():
+            result = web_outlook_app.add_upload_account(
+                'Alice.Bob@example.com',
+                'mail-password',
+                proxy_url='socks5h://outlook.{mail}:tok@127.0.0.1:2260',
+            )
+            web_outlook_app.get_db().commit()
+            account_id = result['id']
+
+        with patch.object(web_outlook_app, 'extract_graph_refresh_token', return_value={
+            'success': True,
+            'refresh_token': 'fresh-refresh-token',
+            'client_id': 'graph-client-id',
+        }) as extract_mock, \
+             patch.object(web_outlook_app, 'test_refresh_token', return_value=(True, None, '')) as token_mock:
+            _, events = self._consume_stream(self._start_graph_task(account_id))
+
+        self.assertTrue(any(event.get('type') == 'success' for event in events))
+        expected_proxy = 'socks5h://outlook.alicebob:tok@127.0.0.1:2260'
+        self.assertEqual(extract_mock.call_args.kwargs.get('proxy_url'), expected_proxy)
+        self.assertEqual(token_mock.call_args.kwargs.get('proxy_url'), expected_proxy)
+
     def test_stream_success_creates_formal_account_and_marks_upload_authorized(self):
         account_id = self._add_upload_account()
 
@@ -294,6 +323,7 @@ class GraphOauthRouteTests(unittest.TestCase):
 
         extract_mock.assert_called_once()
         self.assertEqual(extract_mock.call_args.args[1], 'mail-password')
+        self.assertEqual(extract_mock.call_args.kwargs.get('proxy_url'), '')
         self.assertTrue(any(event['type'] == 'success' for event in events))
         self.assertTrue(events[-1]['success'])
         self.assertNotIn('mail-password', body)
@@ -379,9 +409,30 @@ class GraphOauthRouteTests(unittest.TestCase):
 
         self.assertTrue(events[-1]['success'])
         self.assertEqual(extract_mock.call_args.kwargs['scope'], web_outlook_app.GRAPH_EXTRACT_GRAPH_SCOPE)
-        self.assertIn('https://graph.microsoft.com/Mail.Read', extract_mock.call_args.kwargs['scope'])
+        scope = extract_mock.call_args.kwargs['scope']
+        self.assertIn('https://graph.microsoft.com/Mail.Read', scope)
+        self.assertIn('https://graph.microsoft.com/Mail.ReadWrite', scope)
+        self.assertIn('https://graph.microsoft.com/User.Read', scope)
 
-    def test_stream_default_mode_uses_imap_scope(self):
+    def test_stream_default_mode_uses_graph_scope(self):
+        account_id = self._add_upload_account(email='default-graph-mode@example.com')
+
+        with patch.object(web_outlook_app, 'extract_graph_refresh_token', return_value={
+            'success': True,
+            'refresh_token': 'graph-refresh-token',
+            'client_id': 'graph-client-id',
+        }) as extract_mock, \
+             patch.object(web_outlook_app, 'test_refresh_token', return_value=(True, None, '')):
+            _, events = self._consume_stream(self._start_graph_task(account_id))
+
+        self.assertTrue(events[-1]['success'])
+        self.assertEqual(extract_mock.call_args.kwargs['scope'], web_outlook_app.GRAPH_EXTRACT_GRAPH_SCOPE)
+        scope = extract_mock.call_args.kwargs['scope']
+        self.assertIn('https://graph.microsoft.com/Mail.Read', scope)
+        self.assertIn('https://graph.microsoft.com/Mail.ReadWrite', scope)
+        self.assertIn('https://graph.microsoft.com/User.Read', scope)
+
+    def test_stream_imap_mode_uses_imap_scope(self):
         account_id = self._add_upload_account(email='imap-mode@example.com')
 
         with patch.object(web_outlook_app, 'extract_graph_refresh_token', return_value={
@@ -390,7 +441,7 @@ class GraphOauthRouteTests(unittest.TestCase):
             'client_id': 'imap-client-id',
         }) as extract_mock, \
              patch.object(web_outlook_app, 'test_refresh_token', return_value=(True, None, '')):
-            _, events = self._consume_stream(self._start_graph_task(account_id))
+            _, events = self._consume_stream(self._start_graph_task_with_mode(account_id, 'imap'))
 
         self.assertTrue(events[-1]['success'])
         self.assertEqual(extract_mock.call_args.kwargs['scope'], web_outlook_app.GRAPH_EXTRACT_SCOPE)
@@ -704,7 +755,7 @@ class GraphOauthFrontendContractTests(unittest.TestCase):
         self.assertNotIn('id="graphAuthPasswordMasked"', html)
         self.assertIn('id="graphAuthLog"', html)
 
-    def test_graph_only_mode_text_makes_imap_limitation_explicit(self):
+    def test_graph_api_mode_text_and_default_selection(self):
         root = os.path.dirname(os.path.dirname(__file__))
         with open(
             os.path.join(root, 'templates/partials/index/dialogs-management.html'),
@@ -717,9 +768,12 @@ class GraphOauthFrontendContractTests(unittest.TestCase):
         ) as handle:
             js = handle.read()
 
-        self.assertIn('Graph-only', html)
-        self.assertIn('不含 IMAP 权限', html)
-        self.assertIn('Graph-only（不含 IMAP 权限）', js)
+        self.assertIn('GraphAPI', html)
+        self.assertIn('value="graph" checked', html)
+        self.assertIn("graph: 'GraphAPI'", js)
+        self.assertIn("GRAPH_AUTH_MODE_LABELS.graph", js)
+        self.assertNotIn('Graph-only', html)
+        self.assertNotIn('Graph-only', js)
 
     def test_upload_accounts_modal_explains_four_auth_entry_points(self):
         """Outlook邮箱授权弹窗提示批量导入 / 授权保存 / 重新授权入口及区别。"""

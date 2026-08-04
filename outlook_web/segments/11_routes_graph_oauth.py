@@ -24,9 +24,10 @@ GRAPH_EXTRACT_SCOPE = os.getenv(
     "GRAPH_EXTRACT_SCOPE",
     "offline_access https://outlook.office.com/IMAP.AccessAsUser.All",
 )
+# GraphAPI：与 OAUTH_GRAPH_SCOPES 对齐，含读信 / 标已读写权限 / User.Read
 GRAPH_EXTRACT_GRAPH_SCOPE = os.getenv(
     "GRAPH_EXTRACT_GRAPH_SCOPE",
-    "offline_access https://graph.microsoft.com/Mail.Read",
+    " ".join(["offline_access", *OAUTH_GRAPH_SCOPES]),
 )
 GRAPH_EXTRACT_AUTHORITY = os.getenv("GRAPH_EXTRACT_AUTHORITY", "consumers")
 GRAPH_EXTRACT_SCOPE_BY_MODE = {
@@ -44,12 +45,12 @@ GRAPH_OAUTH_DONE = object()
 
 
 def normalize_graph_oauth_mode(mode: Any) -> str:
-    normalized = str(mode or "imap").strip().lower()
-    return normalized if normalized in GRAPH_EXTRACT_SCOPE_BY_MODE else "imap"
+    normalized = str(mode or "graph").strip().lower()
+    return normalized if normalized in GRAPH_EXTRACT_SCOPE_BY_MODE else "graph"
 
 
 def graph_oauth_mode_label(mode: str) -> str:
-    return "Graph-only（不含 IMAP 权限）" if mode == "graph" else "Outlook IMAP"
+    return "GraphAPI" if mode == "graph" else "IMAP授权"
 
 
 def graph_oauth_sse(payload: Dict[str, Any]) -> str:
@@ -129,11 +130,20 @@ def extract_graph_refresh_token(
     authority: str = GRAPH_EXTRACT_AUTHORITY,
     log: Optional[Callable[[str], None]] = None,
     session_factory: Optional[Callable[[], Any]] = None,
+    proxy_url: str = None,
 ) -> Dict[str, Any]:
     """使用纯 HTTP OAuth2 授权码流程提取 Outlook refresh_token。"""
     try:
         session = session_factory() if session_factory else requests.Session()
-        session.trust_env = True
+        resolved_proxy = str(proxy_url or '').strip()
+        if resolved_proxy:
+            proxies = build_proxies(resolved_proxy)
+            if proxies:
+                session.proxies.update(proxies)
+            # 已配置应用代理时避免与环境代理叠加
+            session.trust_env = False
+        else:
+            session.trust_env = True
         session.headers.update({
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -143,6 +153,9 @@ def extract_graph_refresh_token(
         })
 
         graph_oauth_log(log, f"获取 Microsoft 授权页面: {email}")
+        log_outbound_proxy_usage(f'Outlook自动授权 {email}', resolved_proxy or '')
+        if resolved_proxy:
+            graph_oauth_log(log, f"OAuth 全程固定代理: {format_proxy_for_log(resolved_proxy)}")
         resp = session.get(
             build_graph_authorize_url(client_id, redirect_uri, scope, authority),
             timeout=30,
@@ -503,7 +516,7 @@ def save_graph_authorization_result(upload_row: Any, client_id: str,
 
 
 def run_graph_oauth_task(account_id: int, output_queue: "queue.Queue[Dict[str, Any] | object]",
-                         mode: str = "imap") -> None:
+                         mode: str = "graph") -> None:
     def emit(payload: Dict[str, Any]) -> None:
         output_queue.put(payload)
 
@@ -528,6 +541,9 @@ def run_graph_oauth_task(account_id: int, output_queue: "queue.Queue[Dict[str, A
 
             mode_label = graph_oauth_mode_label(mode)
             scope = GRAPH_EXTRACT_SCOPE_BY_MODE[mode]
+            proxy_config = get_upload_account_resolved_proxy_config(upload_row)
+            # OAuth 多跳必须固定同一主代理；不做中途 failover
+            auth_proxy_url = proxy_config.get('proxy_url', '') or ''
             emit({
                 "type": "start",
                 "email": email,
@@ -536,7 +552,15 @@ def run_graph_oauth_task(account_id: int, output_queue: "queue.Queue[Dict[str, A
             })
             log(f"授权模式: {mode_label}")
             log(f"授权 Scope: {scope}")
-            result = extract_graph_refresh_token(email, password, scope=scope, log=log)
+            if auth_proxy_url:
+                log("使用上传账号/分组代理进行自动授权")
+            result = extract_graph_refresh_token(
+                email,
+                password,
+                scope=scope,
+                log=log,
+                proxy_url=auth_proxy_url,
+            )
             if not result.get("success"):
                 emit({
                     "type": "error",
@@ -551,7 +575,11 @@ def run_graph_oauth_task(account_id: int, output_queue: "queue.Queue[Dict[str, A
             client_id = str(result.get("client_id") or "").strip()
             refresh_token = str(result.get("refresh_token") or "").strip()
             log(f"验证 {mode_label} refresh_token")
-            ok, error_msg, rotated_refresh_token = test_refresh_token(client_id, refresh_token)
+            ok, error_msg, rotated_refresh_token = test_refresh_token(
+                client_id,
+                refresh_token,
+                proxy_url=auth_proxy_url,
+            )
             if not ok:
                 emit({
                     "type": "error",

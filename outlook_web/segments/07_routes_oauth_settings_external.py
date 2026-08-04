@@ -156,7 +156,8 @@ def api_reauthorize_account(account_id):
     db = get_db()
     account = db.execute(
         '''
-        SELECT id, email, client_id, refresh_token, group_id, account_type, provider
+        SELECT id, email, client_id, refresh_token, group_id, account_type, provider,
+               proxy_url, fallback_proxy_url_1, fallback_proxy_url_2
         FROM accounts
         WHERE id = ?
         ''',
@@ -223,7 +224,8 @@ def api_reauthorize_account(account_id):
 
     refreshed_account = db.execute(
         '''
-        SELECT id, email, client_id, refresh_token, group_id, account_type, provider
+        SELECT id, email, client_id, refresh_token, group_id, account_type, provider,
+               proxy_url, fallback_proxy_url_1, fallback_proxy_url_2
         FROM accounts
         WHERE id = ?
         ''',
@@ -1528,6 +1530,86 @@ def api_batch_delete_outlook_upload_accounts():
         'message': f"已删除 {summary['deleted']} 个账号",
         **summary,
     })
+
+
+@app.route('/api/outlook-upload-accounts/export-selected', methods=['POST'])
+@login_required
+def api_export_selected_upload_accounts():
+    """导出选中的 Outlook 上传账号为 TXT 文件（需要二次验证）"""
+    data = request.get_json(silent=True) or {}
+    account_ids = normalize_account_ids(data.get('account_ids') or [])
+    verify_token = data.get('verify_token')
+
+    # 检查二次验证token（使用内存存储）
+    if not verify_token or verify_token not in export_verify_tokens:
+        return jsonify({'success': False, 'error': '需要二次验证', 'need_verify': True}), 401
+
+    token_data = export_verify_tokens[verify_token]
+
+    # 检查是否过期
+    if token_data['expires'] < time.time():
+        del export_verify_tokens[verify_token]
+        return jsonify({'success': False, 'error': '验证已过期，请重新验证', 'need_verify': True}), 401
+
+    # 清除验证token（一次性使用）
+    del export_verify_tokens[verify_token]
+
+    if not account_ids:
+        return jsonify({'success': False, 'error': '请选择要导出的账号'}), 400
+
+    # 查询上传账号
+    db = get_db()
+    placeholders = ','.join('?' * len(account_ids))
+    rows = db.execute(
+        f'''SELECT u.id, u.email, u.password,
+                   COALESCE(a.client_id, '') AS client_id,
+                   COALESCE(a.refresh_token, '') AS refresh_token
+            FROM outlook_upload_accounts u
+            LEFT JOIN accounts a ON a.email = u.email AND a.account_type = 'outlook'
+            WHERE u.id IN ({placeholders})''',
+        account_ids
+    ).fetchall()
+
+    if not rows:
+        return jsonify({'success': False, 'error': '选中的账号不存在或没有可导出的上传账号'})
+
+    # 格式化导出内容
+    lines = []
+    for row in rows:
+        email = str(row['email'] or '')
+        password = get_upload_account_plain_password(row, tolerate_decrypt_error=True)
+        client_id = str(row['client_id'] or '')
+        # refresh_token 在库中以 'enc:' 密文存储；导出必须解密成明文，否则外部
+        # 消费方拿到的是无法使用的密文。与 password 一致：解密失败时留空而不是
+        # 把密文泄漏到导出文件里。
+        try:
+            refresh_token = decrypt_data(str(row['refresh_token'] or ''))
+        except RuntimeError:
+            refresh_token = ''
+        lines.append(f"{email}----{password}----{client_id}----{refresh_token}")
+
+    content = '\n'.join(lines)
+
+    log_audit(
+        'export',
+        'selected_upload_accounts',
+        ','.join(map(str, account_ids)),
+        f"导出选中的 {len(rows)} 个上传账号"
+    )
+
+    from datetime import datetime
+    from urllib.parse import quote
+    filename = f"upload_accounts_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    encoded_filename = quote(filename)
+
+    return Response(
+        content,
+        mimetype='text/plain',
+        headers={
+            'Content-Disposition': f"attachment; filename*=UTF-8''{encoded_filename}",
+            'Content-Type': 'text/plain; charset=utf-8'
+        }
+    )
 
 
 def _queue_formal_account_for_auto_auth(account_id: int) -> Dict[str, Any]:

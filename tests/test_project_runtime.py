@@ -1473,6 +1473,105 @@ class ProjectRuntimeTests(unittest.TestCase):
         )
         self.assertNotIn('third-selected-export@example.com', response.get_data(as_text=True))
 
+    def test_export_selected_upload_accounts(self):
+        with self.app.app_context():
+            db = web_outlook_app.get_db()
+            db.execute('DELETE FROM outlook_upload_accounts')
+            cursor1 = db.execute(
+                "INSERT INTO outlook_upload_accounts (email, password) VALUES (?, ?)",
+                ('upload-a@example.com', web_outlook_app.encrypt_data('pass-aaa'))
+            )
+            upload_id_a = cursor1.lastrowid
+            cursor2 = db.execute(
+                "INSERT INTO outlook_upload_accounts (email, password) VALUES (?, ?)",
+                ('upload-b@example.com', web_outlook_app.encrypt_data('pass-bbb'))
+            )
+            upload_id_b = cursor2.lastrowid
+            db.execute(
+                "INSERT INTO outlook_upload_accounts (email, password) VALUES (?, ?)",
+                ('upload-c@example.com', web_outlook_app.encrypt_data('pass-ccc'))
+            )
+            web_outlook_app.set_setting('login_password', web_outlook_app.hash_password('export-pass2'))
+            db.commit()
+
+        verify_response = self.client.post('/api/export/verify', json={'password': 'export-pass2'})
+        self.assertEqual(verify_response.status_code, 200)
+        verify_payload = verify_response.get_json()
+        self.assertTrue(verify_payload['success'])
+
+        response = self.client.post('/api/outlook-upload-accounts/export-selected', json={
+            'account_ids': [upload_id_a, upload_id_b, 999999],
+            'verify_token': verify_payload['verify_token'],
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('text/plain', response.content_type)
+        self.assertIn('upload_accounts_', response.headers.get('Content-Disposition', ''))
+        lines = response.get_data(as_text=True).splitlines()
+        self.assertIn('upload-a@example.com----pass-aaa--------', lines)
+        self.assertIn('upload-b@example.com----pass-bbb--------', lines)
+        self.assertNotIn('upload-c@example.com----pass-ccc', '\n'.join(lines))
+
+    def test_export_selected_upload_accounts_decrypts_refresh_token(self):
+        # Regression: the export must emit the plaintext refresh_token, never the
+        # stored 'enc:' ciphertext, or external consumers (e.g. the registration
+        # tool) send garbage to Microsoft and get AADSTS9002313 / invalid_grant.
+        with self.app.app_context():
+            db = web_outlook_app.get_db()
+            db.execute('DELETE FROM outlook_upload_accounts')
+            db.execute(
+                '''
+                INSERT INTO accounts (
+                    email, password, client_id, refresh_token,
+                    group_id, remark, status, account_type, provider,
+                    imap_host, imap_port, imap_password, forward_enabled
+                )
+                VALUES (?, '', ?, ?, 1, '', 'active', 'outlook', 'outlook', '', 993, '', 0)
+                ''',
+                (
+                    'upload-enc@example.com',
+                    'client-guid',
+                    web_outlook_app.encrypt_data('plain-refresh-token'),
+                ),
+            )
+            cursor = db.execute(
+                "INSERT INTO outlook_upload_accounts (email, password) VALUES (?, ?)",
+                ('upload-enc@example.com', web_outlook_app.encrypt_data('pass-enc')),
+            )
+            upload_id = cursor.lastrowid
+            web_outlook_app.set_setting('login_password', web_outlook_app.hash_password('export-pass4'))
+            db.commit()
+
+        verify_response = self.client.post('/api/export/verify', json={'password': 'export-pass4'})
+        verify_payload = verify_response.get_json()
+
+        response = self.client.post('/api/outlook-upload-accounts/export-selected', json={
+            'account_ids': [upload_id],
+            'verify_token': verify_payload['verify_token'],
+        })
+
+        self.assertEqual(response.status_code, 200)
+        content = response.get_data(as_text=True)
+        self.assertIn(
+            'upload-enc@example.com----pass-enc----client-guid----plain-refresh-token',
+            content,
+        )
+        self.assertNotIn('enc:', content)
+
+    def test_export_selected_upload_accounts_empty_ids_returns_400(self):
+        with self.app.app_context():
+            web_outlook_app.set_setting('login_password', web_outlook_app.hash_password('export-pass3'))
+
+        verify_response = self.client.post('/api/export/verify', json={'password': 'export-pass3'})
+        verify_payload = verify_response.get_json()
+
+        response = self.client.post('/api/outlook-upload-accounts/export-selected', json={
+            'account_ids': [],
+            'verify_token': verify_payload['verify_token'],
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(response.get_json()['success'])
+
     def test_run_webdav_backup_uploads_all_group_export_file(self):
         self._insert_account('backup-upload@example.com', group_id=1)
         with self.app.app_context():
@@ -2137,6 +2236,7 @@ class FrontendEmailListSecurityTests(unittest.TestCase):
         self.assertNotIn("${data.error && data.error.message ? data.error.message : '加载失败'}", self.emails_js)
         self.assertIn("const detailErrorMessage = data.error?.message", self.emails_js)
         self.assertIn("|| (typeof data.error === 'string' ? data.error : '')", self.emails_js)
+        self.assertIn("|| '加载失败';", self.emails_js)
         self.assertIn("const errorText = container.querySelector('.empty-state-text');", self.emails_js)
         self.assertIn("errorText.textContent = detailErrorMessage;", self.emails_js)
 
@@ -2145,6 +2245,11 @@ class FrontendEmailListSecurityTests(unittest.TestCase):
         self.assertIn('cacheValue.emails = cacheValue.emails.filter(email => !normalizedIds.has(String(email.id)));', self.emails_js)
         self.assertIn('removeDeletedEmailsFromCachedLists(deletedIds);', self.emails_js)
         self.assertIn('if (currentEmailDetail && deletedIds.has(String(currentEmailDetail.id)))', self.emails_js)
+        self.assertIn('function buildEmailDeleteItems(sourceItems)', self.emails_js)
+        self.assertIn('items', self.emails_js)
+        self.assertIn('method: getRemoteMailboxMethodFallback()', self.emails_js)
+        self.assertIn('await deleteEmails(getSelectedEmailItems());', self.emails_js)
+        self.assertIn('await deleteEmails([currentEmailDetail]);', self.emails_js)
 
 
 class FrontendEmailBodyRetentionAndIframeTests(unittest.TestCase):
