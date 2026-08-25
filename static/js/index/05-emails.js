@@ -1576,6 +1576,8 @@
                                     margin: 0;
                                     padding: 0;
                                     background-color: #ffffff;
+                                    -webkit-user-select: text;
+                                    user-select: text;
                                 }
                                 img {
                                     max-width: 100%;
@@ -1583,6 +1585,9 @@
                                 }
                                 a {
                                     color: #0078d4;
+                                    -webkit-user-select: text;
+                                    user-select: text;
+                                    cursor: copy;
                                 }
                             </style>
                         </head>
@@ -1591,6 +1596,63 @@
                     `;
                     iframe.srcdoc = htmlContent;
                 }
+            }
+        }
+
+        function isCopyableEmailHref(href) {
+            const value = String(href || '').trim();
+            if (!value || value.startsWith('#')) {
+                return false;
+            }
+            const lower = value.toLowerCase();
+            return !lower.startsWith('javascript:') && !lower.startsWith('data:') && !lower.startsWith('vbscript:');
+        }
+
+        function bindEmailBodyLinks(iframe) {
+            try {
+                const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                if (!iframeDoc || !iframeDoc.body || iframe.dataset.emailLinksBound === '1') {
+                    return;
+                }
+
+                if (!iframeDoc.getElementById('emailBodyLinkCopyStyle')) {
+                    const style = iframeDoc.createElement('style');
+                    style.id = 'emailBodyLinkCopyStyle';
+                    style.textContent = `
+                        html, body, a, p, div, span, td, th, li, h1, h2, h3, h4, h5, h6 {
+                            -webkit-user-select: text !important;
+                            user-select: text !important;
+                        }
+                        a[href] {
+                            cursor: copy;
+                        }
+                    `;
+                    (iframeDoc.head || iframeDoc.documentElement).appendChild(style);
+                }
+
+                iframeDoc.querySelectorAll('a[href]').forEach((anchor) => {
+                    const href = (anchor.getAttribute('href') || '').trim();
+                    if (isCopyableEmailHref(href) && !anchor.getAttribute('title')) {
+                        anchor.setAttribute('title', `点击复制链接：${href}`);
+                    }
+                });
+
+                iframeDoc.addEventListener('click', (event) => {
+                    const anchor = event.target && event.target.closest ? event.target.closest('a[href]') : null;
+                    if (!anchor) {
+                        return;
+                    }
+                    const href = (anchor.getAttribute('href') || '').trim();
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (!isCopyableEmailHref(href)) {
+                        return;
+                    }
+                    copyTextToClipboard(href, '链接已复制');
+                }, true);
+                iframe.dataset.emailLinksBound = '1';
+            } catch (e) {
+                console.warn('绑定邮件正文链接失败:', e);
             }
         }
 
@@ -1617,6 +1679,7 @@
                 };
 
                 adjustHeight();
+                bindEmailBodyLinks(iframe);
                 [100, 300, 500, 1000, 2000].forEach(delay => {
                     normalDetailIframeResizeResources.timers.push(window.setTimeout(adjustHeight, delay));
                 });
@@ -1855,6 +1918,7 @@
                 };
 
                 adjustHeight();
+                bindEmailBodyLinks(iframe);
                 [100, 300, 500, 1000].forEach(delay => {
                     fullscreenIframeResizeResources.timers.push(window.setTimeout(adjustHeight, delay));
                 });
