@@ -1611,7 +1611,11 @@
         function bindEmailBodyLinks(iframe) {
             try {
                 const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-                if (!iframeDoc || !iframeDoc.body || iframe.dataset.emailLinksBound === '1') {
+                if (!iframeDoc || !iframeDoc.documentElement || iframeDoc.documentElement.dataset.emailLinksBound === '1') {
+                    return;
+                }
+                // about:blank 会先触发 onload，srcdoc 替换文档后再绑一次
+                if (!iframeDoc.body || !String(iframeDoc.body.innerHTML || '').trim()) {
                     return;
                 }
 
@@ -1637,7 +1641,7 @@
                     }
                 });
 
-                iframeDoc.addEventListener('click', (event) => {
+                const copyLinkFromEvent = (event) => {
                     const anchor = event.target && event.target.closest ? event.target.closest('a[href]') : null;
                     if (!anchor) {
                         return;
@@ -1645,12 +1649,18 @@
                     const href = (anchor.getAttribute('href') || '').trim();
                     event.preventDefault();
                     event.stopPropagation();
+                    if (typeof event.stopImmediatePropagation === 'function') {
+                        event.stopImmediatePropagation();
+                    }
                     if (!isCopyableEmailHref(href)) {
                         return;
                     }
                     copyTextToClipboard(href, '链接已复制');
-                }, true);
-                iframe.dataset.emailLinksBound = '1';
+                };
+
+                iframeDoc.addEventListener('click', copyLinkFromEvent, true);
+                iframeDoc.addEventListener('auxclick', copyLinkFromEvent, true);
+                iframeDoc.documentElement.dataset.emailLinksBound = '1';
             } catch (e) {
                 console.warn('绑定邮件正文链接失败:', e);
             }
@@ -1675,11 +1685,11 @@
                             html.offsetHeight
                         );
                         iframe.style.height = Math.max(height + 100, 600) + 'px';
+                        bindEmailBodyLinks(iframe);
                     }
                 };
 
                 adjustHeight();
-                bindEmailBodyLinks(iframe);
                 [100, 300, 500, 1000, 2000].forEach(delay => {
                     normalDetailIframeResizeResources.timers.push(window.setTimeout(adjustHeight, delay));
                 });
@@ -1914,11 +1924,11 @@
                             html.offsetHeight
                         );
                         iframe.style.height = (height + 100) + 'px';
+                        bindEmailBodyLinks(iframe);
                     }
                 };
 
                 adjustHeight();
-                bindEmailBodyLinks(iframe);
                 [100, 300, 500, 1000].forEach(delay => {
                     fullscreenIframeResizeResources.timers.push(window.setTimeout(adjustHeight, delay));
                 });
