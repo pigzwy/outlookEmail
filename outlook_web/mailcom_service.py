@@ -6,6 +6,7 @@ import json
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
+from outlook_web.mail_datetime import normalize_mail_date_for_display
 from outlook_web.mailcom_provider import MailcomCookieProvider
 from outlook_web.mailcom_types import Message
 
@@ -140,7 +141,7 @@ def _message_to_list_item(message: Message, folder: str) -> Dict[str, Any]:
         "subject": message.subject or "无主题",
         "from": sender,
         "to": message.to or "",
-        "date": message.date or "",
+        "date": normalize_mail_date_for_display(message.date or ""),
         "id_mode": MAILCOM_REQUEST_METHOD,
         "is_read": False,
         "has_attachments": False,
@@ -163,7 +164,7 @@ def _message_to_detail(message: Message) -> Dict[str, Any]:
         "from": message.from_address or message.from_ or "未知",
         "to": message.to or "",
         "cc": "",
-        "date": message.date or "",
+        "date": normalize_mail_date_for_display(message.date or ""),
         "body": body,
         "body_type": body_type,
         "attachments": [],

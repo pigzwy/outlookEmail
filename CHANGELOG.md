@@ -10,6 +10,9 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - 同步上游 `assast/outlookEmail` `main` 至 3.0.6（登录会话有效期、Outlook 授权通道记忆、邮件获取超时可配置）。
 - 接入 mail.com 网页 Cookie 会话取信（参考 [OpenMail](https://github.com/IanShaw027/openmail)）：导入格式 `邮箱----登录密码`，支持 `mail.com` / `email.com` / `usa.com` 等同族域名，会话 cookies 加密保存在 `accounts.mailcom_session`。
 
+### Changed
+- mail.com 列表/详情时间与 Outlook、IMAP 对齐：解析 lightmailer 英文日期后按 `今天 HH:MM` 或 `2026年8月24日 HH:MM` 显示，不再原样露出 `Monday, August 24, 2026 at 5:07 PM`。
+
 ## [3.0.6] - 2026-08-20
 
 ### Added

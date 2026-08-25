@@ -23,9 +23,11 @@ from outlook_web.mailcom_provider import (
     pick_login_form,
     session_looks_valid,
 )
+from outlook_web.mail_datetime import normalize_mail_date_for_display, parse_mail_datetime
 from outlook_web.mailcom_service import (
     MAILCOM_METHOD,
     MAILCOM_PROVIDER_KEY,
+    _message_to_list_item,
     dump_mailcom_session,
     is_mailcom_account,
     is_mailcom_domain,
@@ -273,6 +275,25 @@ class MailcomProviderParseTests(unittest.TestCase):
             extract_verification_code(subject='Your verification code is 123456'),
             '123456',
         )
+
+    def test_mailcom_ui_date_normalizes_to_iso(self):
+        parsed = parse_mail_datetime('Monday, August 24, 2026 at 5:07 PM')
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.year, 2026)
+        self.assertEqual(parsed.month, 8)
+        self.assertEqual(parsed.day, 24)
+        self.assertEqual(parsed.hour, 17)
+        self.assertEqual(parsed.minute, 7)
+        self.assertEqual(
+            normalize_mail_date_for_display('Monday, August 24, 2026 at 5:07 PM'),
+            '2026-08-24T17:07:00',
+        )
+
+        item = _message_to_list_item(
+            Message(id='1', subject='Hello', date='Monday, August 24, 2026 at 5:07 PM'),
+            'inbox',
+        )
+        self.assertEqual(item['date'], '2026-08-24T17:07:00')
 
 
 class MailcomIntegrationTests(unittest.TestCase):

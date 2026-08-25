@@ -308,6 +308,12 @@ class ImapFolderResolutionTests(unittest.TestCase):
         self.assertEqual(parsed.month, 4)
         self.assertEqual(parsed.day, 14)
 
+    def test_parse_email_datetime_accepts_mailcom_ui_date(self):
+        parsed = web_outlook_app.parse_email_datetime('Monday, August 24, 2026 at 5:07 PM')
+
+        self.assertIsNotNone(parsed)
+        self.assertEqual((parsed.year, parsed.month, parsed.day, parsed.hour, parsed.minute), (2026, 8, 24, 17, 7))
+
     def test_fallback_from_examine_to_select_for_126_inbox(self):
         mail = FakeMail(
             selectable_by_mode={
