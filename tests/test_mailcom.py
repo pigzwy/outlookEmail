@@ -27,8 +27,10 @@ from outlook_web.mail_datetime import normalize_mail_date_for_display, parse_mai
 from outlook_web.mailcom_service import (
     MAILCOM_METHOD,
     MAILCOM_PROVIDER_KEY,
+    _message_to_detail,
     _message_to_list_item,
     dump_mailcom_session,
+    fill_missing_message_headers,
     is_mailcom_account,
     is_mailcom_domain,
     load_mailcom_session,
@@ -294,6 +296,34 @@ class MailcomProviderParseTests(unittest.TestCase):
             'inbox',
         )
         self.assertEqual(item['date'], '2026-08-24T17:07:00')
+
+    def test_fill_missing_detail_headers_from_list(self):
+        detail = Message(
+            id='1785333016658725222',
+            subject='',
+            from_='',
+            body_html='<p>Sign in to Claude.ai</p>',
+        )
+        listed = Message(
+            id='1785333016658725222',
+            subject='Your secure link to Claude.ai is here | 2026-07-29 21:50:15',
+            from_='Anthropic',
+            from_address='no-reply@mail.anthropic.com',
+            date='Monday, July 29, 2026 at 9:50 PM',
+        )
+        filled = fill_missing_message_headers(detail, listed)
+        payload = _message_to_detail(filled)
+        self.assertEqual(payload['subject'], listed.subject)
+        self.assertEqual(payload['from'], 'no-reply@mail.anthropic.com')
+        self.assertEqual(payload['date'], '2026-07-29T21:50:00')
+        self.assertIn('Sign in to Claude.ai', payload['body'])
+
+        kept = fill_missing_message_headers(
+            Message(id='2', subject='Keep me', from_='Alice <a@b.com>', body_text='ok'),
+            listed,
+        )
+        self.assertEqual(kept.subject, 'Keep me')
+        self.assertEqual(kept.from_, 'Alice <a@b.com>')
 
 
 class MailcomIntegrationTests(unittest.TestCase):

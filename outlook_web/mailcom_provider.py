@@ -2836,7 +2836,38 @@ class MailcomCookieProvider:
                     ]
                 )
         seen: set[str] = set()
-        best: Message | None = None
+        assembled: Message | None = None
+
+        def absorb(part: Message) -> None:
+            nonlocal assembled
+            if assembled is None:
+                assembled = part
+                return
+            if part.subject and not assembled.subject:
+                assembled.subject = part.subject
+            if part.from_ and not assembled.from_:
+                assembled.from_ = part.from_
+            if part.from_address and not assembled.from_address:
+                assembled.from_address = part.from_address
+            if part.to and not assembled.to:
+                assembled.to = part.to
+            if part.date and not assembled.date:
+                assembled.date = part.date
+            if part.body_html and (
+                not assembled.body_html or len(part.body_html) > len(assembled.body_html or "")
+            ):
+                assembled.body_html = part.body_html
+            if part.body_text and (
+                not assembled.body_text or len(part.body_text) > len(assembled.body_text or "")
+            ):
+                assembled.body_text = part.body_text
+            if part.verification_code and not assembled.verification_code:
+                assembled.verification_code = part.verification_code
+            if part.body_preview and (
+                not assembled.body_preview or _is_chrome_title(assembled.body_preview)
+            ):
+                assembled.body_preview = part.body_preview
+
         for url in candidates:
             if not url or url in seen:
                 continue
@@ -2930,12 +2961,12 @@ class MailcomCookieProvider:
                     msg.body_preview = ""
 
             if msg.subject or msg.body_text or msg.body_html:
-                # Prefer a message that actually has body content
-                if msg.body_text or msg.body_html:
-                    return msg
-                if best is None:
-                    best = msg
-        return best
+                absorb(msg)
+                if assembled and (assembled.body_html or assembled.body_text) and (
+                    assembled.subject or assembled.from_ or assembled.from_address
+                ):
+                    return assembled
+        return assembled
 
 
 # Back-compat alias used by registry

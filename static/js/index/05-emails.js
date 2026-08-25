@@ -698,6 +698,43 @@
             });
         }
 
+        function isPlaceholderEmailHeader(value) {
+            const text = String(value || '').trim();
+            if (!text) {
+                return true;
+            }
+            const lower = text.toLowerCase();
+            return text === '无主题'
+                || text === '未知'
+                || text === '未知发件人'
+                || text === '-'
+                || lower === '(no subject)'
+                || lower === 'no subject'
+                || lower === 'unknown';
+        }
+
+        function mergeEmailDetailWithListItem(detail, listItem) {
+            if (!listItem) {
+                return detail;
+            }
+            const pick = (detailValue, listValue) => {
+                const listed = String(listValue || '').trim();
+                if (listed && isPlaceholderEmailHeader(detailValue)) {
+                    return listValue;
+                }
+                return detailValue;
+            };
+            return {
+                ...detail,
+                subject: pick(detail?.subject, listItem.subject),
+                from: pick(detail?.from, listItem.from),
+                to: pick(detail?.to, listItem.to),
+                date: pick(detail?.date, listItem.date),
+                folder: detail?.folder || listItem.folder,
+                id_mode: detail?.id_mode || listItem.id_mode || ''
+            };
+        }
+
         function buildEmailDetailRequestUrl(messageId, folder, selectedEmail = {}) {
             const query = new URLSearchParams({
                 method: getCurrentEmailRemoteActionMethod(selectedEmail),
@@ -1421,11 +1458,11 @@
                 const data = await response.json();
 
                 if (data.success) {
-                    currentEmailDetail = {
+                    currentEmailDetail = mergeEmailDetailWithListItem({
                         ...data.email,
                         folder: requestFolder,
                         id_mode: data.email?.id_mode || selectedEmail?.id_mode || ''
-                    };
+                    }, selectedEmail);
                     renderEmailDetail(currentEmailDetail);
                     if (selectedEmail?.is_read === false) {
                         void requestMarkEmailsAsRead([{
@@ -1608,6 +1645,17 @@
             return !lower.startsWith('javascript:') && !lower.startsWith('data:') && !lower.startsWith('vbscript:');
         }
 
+        function formatCopiedLinkToast(href) {
+            const value = String(href || '').trim();
+            if (!value) {
+                return '链接已复制';
+            }
+            if (value.length <= 72) {
+                return `已复制：${value}`;
+            }
+            return `已复制：${value.slice(0, 42)}…${value.slice(-18)}`;
+        }
+
         function resolveCopyableEmailHref(href) {
             const raw = String(href || '').trim();
             if (!isCopyableEmailHref(raw)) {
@@ -1664,8 +1712,11 @@
 
                 iframeDoc.querySelectorAll('a[href]').forEach((anchor) => {
                     const href = resolveCopyableEmailHref(anchor.getAttribute('href'));
+                    if (href && href !== (anchor.getAttribute('href') || '').trim()) {
+                        anchor.setAttribute('href', href);
+                    }
                     if (href && !anchor.getAttribute('title')) {
-                        anchor.setAttribute('title', `点击复制链接：${href}`);
+                        anchor.setAttribute('title', `点击复制，Ctrl+点击打开：${href}`);
                     }
                 });
 
@@ -1683,7 +1734,15 @@
                     if (!href) {
                         return;
                     }
-                    copyTextToClipboard(href, '链接已复制');
+                    const shouldOpen = event.type === 'auxclick'
+                        ? event.button === 1
+                        : (event.metaKey || event.ctrlKey);
+                    if (shouldOpen) {
+                        window.open(href, '_blank', 'noopener,noreferrer');
+                        showToast('已打开链接', 'success');
+                        return;
+                    }
+                    copyTextToClipboard(href, formatCopiedLinkToast(href));
                 };
 
                 iframeDoc.addEventListener('click', copyLinkFromEvent, true);

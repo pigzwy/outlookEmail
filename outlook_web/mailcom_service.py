@@ -151,6 +151,32 @@ def _message_to_list_item(message: Message, folder: str) -> Dict[str, Any]:
     }
 
 
+_SUBJECT_PLACEHOLDERS = frozenset({"", "无主题", "(no subject)", "no subject"})
+_FROM_PLACEHOLDERS = frozenset({"", "未知", "未知发件人", "unknown", "undisclosed"})
+
+
+def _is_placeholder_header(value: Any, placeholders: frozenset) -> bool:
+    return str(value or "").strip().lower() in placeholders
+
+
+def fill_missing_message_headers(detail: Message, listed: Optional[Message]) -> Message:
+    """Keep the detail body, but restore subject/from/date from the list row."""
+    if listed is None or detail is None:
+        return detail
+    if _is_placeholder_header(detail.subject, _SUBJECT_PLACEHOLDERS) and listed.subject:
+        detail.subject = listed.subject
+    listed_from = listed.from_ or listed.from_address
+    if _is_placeholder_header(detail.from_, _FROM_PLACEHOLDERS) and listed_from:
+        detail.from_ = listed_from
+    if not str(detail.from_address or "").strip() and listed.from_address:
+        detail.from_address = listed.from_address
+    if not str(detail.to or "").strip() and listed.to:
+        detail.to = listed.to
+    if not str(detail.date or "").strip() and listed.date:
+        detail.date = listed.date
+    return detail
+
+
 def _message_to_detail(message: Message) -> Dict[str, Any]:
     body_html = (message.body_html or "").strip()
     body_text = (message.body_text or "").strip()
@@ -276,15 +302,16 @@ def get_email_detail_mailcom(
             site="mail.com",
             meta=session.get("session_meta") or {},
         )
+        listed = next((item for item in result.messages if str(item.id) == str(message_id)), None)
         if detail is None:
-            matched = next((item for item in result.messages if str(item.id) == str(message_id)), None)
-            if matched and (matched.body_html or matched.body_text or matched.subject):
-                detail = matched
+            if listed and (listed.body_html or listed.body_text or listed.subject):
+                detail = listed
         if detail is None:
             return {
                 "success": False,
                 "error": _build_error("MAILCOM_DETAIL_FAILED", "未找到该邮件", "MailcomFetchError", 404),
             }
+        fill_missing_message_headers(detail, listed)
         return {"success": True, "email": _message_to_detail(detail), "method": MAILCOM_METHOD}
     except Exception as exc:
         return {
