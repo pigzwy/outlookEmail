@@ -3461,6 +3461,7 @@ _PROTOCOL_ERROR_DETAIL_KEYS = (
     'imap_old',
     'imap_generic',
     'browser',
+    'mailcom',
 )
 
 
@@ -3619,6 +3620,22 @@ def fetch_account_folder_emails(account: Dict[str, Any], folder: str, skip: int,
         return {
             'success': False,
             'error': f'folder 参数无效，支持: {", ".join(sorted(VALID_MAIL_FOLDERS - {"all"} | {"all"}))}'
+        }
+
+    if is_mailcom_account(account):
+        result = get_emails_mailcom(account, folder_name, skip, top, proxy_url)
+        if result.get('success'):
+            return {
+                'success': True,
+                'emails': format_email_items(result.get('emails', []), folder_name),
+                'method': result.get('method', MAILCOM_METHOD),
+                'has_more': bool(result.get('has_more')),
+                'request_method': result.get('request_method', MAILCOM_REQUEST_METHOD),
+            }
+        return {
+            'success': False,
+            'error': result.get('error', '获取邮件失败'),
+            'details': {'mailcom': result.get('error')}
         }
 
     if account.get('account_type') == 'imap':
@@ -3856,6 +3873,8 @@ def api_mark_emails_read():
 
     proxy_url = get_account_proxy_url(account)
     fallback_proxy_urls = get_account_proxy_failover_urls(account)
+    if is_mailcom_account(account):
+        return jsonify(mailcom_unsupported_action('mark-read'))
     if account.get('account_type') == 'imap':
         return jsonify(mark_imap_account_emails_read(account, items, proxy_url))
 
@@ -3923,6 +3942,8 @@ def api_delete_emails():
 
     proxy_url = get_account_proxy_url(account)
     fallback_proxy_urls = get_account_proxy_failover_urls(account)
+    if is_mailcom_account(account):
+        return jsonify(mailcom_unsupported_action('delete'))
     if account.get('account_type') == 'imap':
         return jsonify(delete_imap_account_emails(account, items, proxy_url))
 
@@ -3962,7 +3983,14 @@ def api_get_raw_email(email_addr, message_id):
     fallback_proxy_urls = get_account_proxy_failover_urls(account)
 
     raw_content = None
-    if account.get('account_type') == 'imap':
+    if is_mailcom_account(account):
+        raw_content = get_raw_email_mailcom(
+            account,
+            message_id,
+            folder,
+            proxy_url,
+        )
+    elif account.get('account_type') == 'imap':
         raw_content = get_raw_email_imap_generic(
             account['email'],
             account.get('imap_password', ''),
@@ -4045,6 +4073,19 @@ def fetch_email_detail_for_account(account, message_id, method='graph', folder='
         if retained_detail and not retained_detail_has_incomplete_attachment_metadata(retained_detail):
             return retained_detail
 
+    if is_mailcom_account(account):
+        result = get_email_detail_mailcom(account, message_id, folder, proxy_url)
+        if result.get('success'):
+            return build_retained_detail_success_response(
+                account, folder, message_id, result.get('email', {}), MAILCOM_REQUEST_METHOD, 'mailcom', id_mode
+            )
+        return {
+            'success': False,
+            'error': normalize_email_detail_error(result.get('error')),
+            'method': MAILCOM_METHOD,
+            'details': {'mailcom': result.get('error')} if result.get('error') else {},
+        }
+
     if account.get('account_type') == 'imap':
         result = fetch_imap_account_detail_response(
             account, folder, message_id, method, id_mode, proxy_url
@@ -4123,6 +4164,8 @@ def api_get_email_detail(email_addr, message_id):
 
 
 def download_email_attachment_for_account(account, method, message_id, attachment_id, folder, proxy_url, fallback_proxy_urls, id_mode=''):
+    if is_mailcom_account(account):
+        return mailcom_unsupported_action('attachment')
     if account.get('account_type') == 'imap':
         return download_email_attachment_imap_generic_result(
             account['email'],
@@ -4160,6 +4203,8 @@ def download_email_attachment_for_account(account, method, message_id, attachmen
 
 
 def get_email_attachment_metadata_for_download(account, method, message_id, folder, proxy_url, fallback_proxy_urls, id_mode=''):
+    if is_mailcom_account(account):
+        return mailcom_unsupported_action('attachment')
     if account.get('account_type') == 'imap':
         detail_result = get_email_detail_imap_generic_result(
             account['email'],

@@ -424,6 +424,15 @@ def build_forward_cursor_reset(account: Dict[str, Any], mode: str = 'window', lo
 def fetch_forward_detail(account: Dict[str, Any], message_id: str, folder: str = 'inbox') -> Optional[Dict[str, Any]]:
     proxy_url = get_account_proxy_url(account)
     fallback_proxy_urls = get_account_proxy_failover_urls(account)
+    if is_mailcom_account(account):
+        result = get_email_detail_mailcom(
+            account,
+            message_id,
+            folder,
+            proxy_url,
+        )
+        return result.get('email') if result.get('success') else None
+
     if account.get('account_type') == 'imap':
         result = get_email_detail_imap_generic_result(
             account['email'],
@@ -467,7 +476,7 @@ def open_forwarding_db_connection():
 
 
 def decrypt_forwarding_account_secrets(account: Dict[str, Any]) -> Dict[str, Any]:
-    for field_name in ('password', 'refresh_token', 'imap_password'):
+    for field_name in ('password', 'refresh_token', 'imap_password', 'mailcom_session'):
         if not account.get(field_name):
             continue
         try:
@@ -1787,6 +1796,18 @@ def email_matches_filters(account: Dict[str, Any], item: Dict[str, Any],
 
     proxy_url = get_account_proxy_url(account)
     fallback_proxy_urls = get_account_proxy_failover_urls(account)
+    if is_mailcom_account(account):
+        detail_payload = get_email_detail_mailcom(
+            account,
+            str(item.get('id', '')),
+            item.get('folder', 'inbox'),
+            proxy_url,
+        )
+        if detail_payload and detail_payload.get('success'):
+            body = str((detail_payload.get('email') or {}).get('body', '') or '')
+            return keyword in strip_html_content(body).lower()
+        return False
+
     if account.get('account_type') == 'imap':
         detail_payload = get_email_detail_imap_generic_result(
             account['email'],

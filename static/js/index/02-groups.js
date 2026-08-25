@@ -2036,6 +2036,7 @@
             yahoo: 'Yahoo',
             aliyun: 'Aliyun',
             '2925': '2925邮箱',
+            mailcom: 'mail.com',
             custom: 'Custom IMAP'
         };
 
@@ -2269,6 +2270,15 @@
                 inputEl.placeholder = '邮箱----密码----client_id----refresh_token';
                 if (exampleEl) {
                     exampleEl.textContent = '示例：\nuser@outlook.com----password123----24d9a0ed-8787-4584-883c-2fd79308940a----0.AXEA...\nuser@outlook.com----password123----0.AXEA...----24d9a0ed-8787-4584-883c-2fd79308940a';
+                }
+                return;
+            }
+
+            if (provider === 'mailcom') {
+                hintEl.textContent = '格式：邮箱----登录密码。mail.com 通过网页会话取信（参考 OpenMail），无需 IMAP 授权码。';
+                inputEl.placeholder = '邮箱----登录密码';
+                if (exampleEl) {
+                    exampleEl.textContent = '示例：\nname@mail.com----password\nname@email.com----password';
                 }
                 return;
             }

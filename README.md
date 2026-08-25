@@ -1,6 +1,6 @@
 # 多邮箱邮件管理工具
 
-一个面向多邮箱账号场景的邮件管理工具，支持通过 Outlook/Hotmail OAuth、Microsoft Graph API 和标准 IMAP 统一读取、管理和转发邮件，并提供 Web 界面、Chrome/Edge 浏览器扩展，用于分组管理、账号管理、邮件查看和对外 API 调用。当前支持 Outlook/Hotmail、Gmail、QQ、163、126、Yahoo、阿里邮箱以及自定义 IMAP 邮箱，同时集成 GPTMail、DuckMail、Cloudflare Temp Email 多提供商临时邮箱能力。
+一个面向多邮箱账号场景的邮件管理工具，支持通过 Outlook/Hotmail OAuth、Microsoft Graph API 和标准 IMAP 统一读取、管理和转发邮件，并提供 Web 界面、Chrome/Edge 浏览器扩展，用于分组管理、账号管理、邮件查看和对外 API 调用。当前支持 Outlook/Hotmail、Gmail、QQ、163、126、Yahoo、阿里邮箱、mail.com（网页 Cookie 会话）以及自定义 IMAP 邮箱，同时集成 GPTMail、DuckMail、Cloudflare Temp Email 多提供商临时邮箱能力。
 
 注意：改密码会导致auth失效，需要重新授权
 ## 📦 快速开始
@@ -208,6 +208,7 @@ docker compose -f docker-compose.build.yml down
 1. **Outlook/Hotmail OAuth + Graph API** - 优先方式，适合 Outlook / Hotmail / Live 账号
 2. **Outlook/Hotmail OAuth + IMAP 回退** - `outlook.live.com` / `outlook.office365.com`
 3. **标准 IMAP** - 适用于 Gmail、QQ、163、126、Yahoo、阿里邮箱和自定义 IMAP
+4. **mail.com Cookie 会话** - 使用登录密码走网页会话取信（参考 [OpenMail](https://github.com/IanShaw027/openmail)），适合免费 mail.com 及同族域名（`email.com` / `usa.com` 等）
 
 #### 普通邮箱本地保留行为与限制
 
@@ -390,6 +391,23 @@ user@outlook.com----password123----24d9a0ed-8787-4584-883c-2fd79308940a----0.AXE
 user@gmail.com----app-password
 user@qq.com----imap-auth-code
 ```
+
+#### mail.com
+
+使用 mail.com 网页登录密码，通过 Cookie 会话读取收件箱 / 垃圾箱（不依赖 IMAP）。导入后首次取信会登录并缓存会话，后续优先复用。
+
+```txt
+邮箱----登录密码
+```
+
+示例：
+
+```txt
+name@mail.com----password
+name@email.com----password
+```
+
+当前 mail.com 路径支持列表和详情；标记已读、删除和附件下载暂不支持。若账号已开通 IMAP，也可改用「自定义 IMAP」并填写 `imap.mail.com:993`。
 
 #### 自定义 IMAP
 

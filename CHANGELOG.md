@@ -6,6 +6,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Added
+- 同步上游 `assast/outlookEmail` `main` 至 3.0.6（登录会话有效期、Outlook 授权通道记忆、邮件获取超时可配置）。
+- 接入 mail.com 网页 Cookie 会话取信（参考 [OpenMail](https://github.com/IanShaw027/openmail)）：导入格式 `邮箱----登录密码`，支持 `mail.com` / `email.com` / `usa.com` 等同族域名，会话 cookies 加密保存在 `accounts.mailcom_session`。
+
 ## [3.0.6] - 2026-08-20
 
 ### Added

@@ -848,7 +848,7 @@ curl -X POST -H "X-API-Key: your-api-key" -H "Content-Type: application/json" \
 | `account_string` | string | 是 | 多行账号文本 |
 | `group_id` | int | 否 | 目标分组，默认 `1` |
 | `account_format` | string | 否 | Outlook 导入格式：`client_id_refresh_token` 或 `refresh_token_client_id` |
-| `provider` | string | 否 | `outlook`、`auto`、`qq`、`163`、`126`、`yahoo`、`aliyun`、`custom` |
+| `provider` | string | 否 | `outlook`、`auto`、`qq`、`163`、`126`、`yahoo`、`aliyun`、`2925`、`mailcom`、`custom` |
 | `imap_host` | string | 否 | `provider=custom` 时的 IMAP 服务器 |
 | `imap_port` | int | 否 | `provider=custom` 时的 IMAP 端口 |
 | `forward_enabled` | bool | 否 | 导入后是否默认启用转发 |
@@ -873,6 +873,7 @@ curl -X POST -H "X-API-Key: your-api-key" -H "Content-Type: application/json" \
 - Outlook: 每行 `邮箱----密码----ClientID----RefreshToken`
 - Outlook 反序: 每行 `邮箱----密码----RefreshToken----ClientID`，并设置 `account_format=refresh_token_client_id`
 - 非 Outlook IMAP: 每行 `邮箱----IMAP密码`
+- mail.com: 每行 `邮箱----登录密码`，`provider=mailcom`（网页 Cookie 会话，无需 IMAP 授权码）
 - 自定义 IMAP: 每行 `邮箱----IMAP密码----IMAP主机----IMAP端口`
 
 #### 请求示例
@@ -969,7 +970,7 @@ Content-Type: application/json
 | `refresh_token` | string | Outlook 必填 | Outlook Refresh Token |
 | `account_type` | string | 否 | `outlook` 或 `imap` |
 | `authorization_type` | string | 否 | Outlook OAuth 首选通道：`graph`、`imap` 或空字符串；未传则保留现有值 |
-| `provider` | string | 否 | `outlook`、`auto`、`qq`、`163`、`126`、`yahoo`、`aliyun`、`custom` |
+| `provider` | string | 否 | `outlook`、`auto`、`qq`、`163`、`126`、`yahoo`、`aliyun`、`2925`、`mailcom`、`custom` |
 | `imap_host` | string | 自定义 IMAP 必填 | 自定义 IMAP 服务器 |
 | `imap_port` | int | 否 | IMAP 端口 |
 | `imap_password` | string | IMAP 必填 | IMAP 密码 |

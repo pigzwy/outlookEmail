@@ -2148,7 +2148,7 @@
                 return details;
             }
 
-            const protocolKeys = ['graph', 'imap_new', 'imap_old', 'imap_generic', 'browser'];
+            const protocolKeys = ['graph', 'imap_new', 'imap_old', 'imap_generic', 'browser', 'mailcom'];
             const hasTopLevelProtocol = protocolKeys.some((key) => details[key] !== undefined);
             if (hasTopLevelProtocol) {
                 return details;
@@ -2217,6 +2217,7 @@
                 'imap_new': 'IMAP（新服务器）',
                 'imap_old': 'IMAP（旧服务器）',
                 'imap_generic': '标准 IMAP',
+                'mailcom': 'mail.com Cookie',
                 'browser': '浏览器到服务端',
                 'inbox': '收件箱',
                 'junkemail': '垃圾邮件',
@@ -2277,6 +2278,12 @@
                 if (code === 'IMAP_CONNECT_FAILED') {
                     return `IMAP 连接失败：${msg || '请检查 IMAP 主机、端口和网络连通性'}`;
                 }
+                if (code === 'MAILCOM_FETCH_FAILED' || code === 'MAILCOM_DETAIL_FAILED') {
+                    return `mail.com 取信失败：${msg || '请检查登录密码或稍后重试'}`;
+                }
+                if (code === 'MAILCOM_UNSUPPORTED') {
+                    return msg || 'mail.com Cookie 会话暂不支持该操作';
+                }
                 return msg || details || '未知错误';
             }
 
@@ -2284,7 +2291,7 @@
             const detailEntries = (typeof expandedDetails === 'object' && !Array.isArray(expandedDetails) && !(expandedDetails.message && expandedDetails.code))
                 ? expandedDetails
                 : { error: expandedDetails };
-            const preferredOrder = ['browser', 'graph', 'imap_new', 'imap_old', 'imap_generic', 'inbox', 'junkemail', 'deleteditems', 'all', 'error'];
+            const preferredOrder = ['browser', 'graph', 'imap_new', 'imap_old', 'imap_generic', 'mailcom', 'inbox', 'junkemail', 'deleteditems', 'all', 'error'];
             const methods = [
                 ...preferredOrder.filter(method => detailEntries[method] !== undefined),
                 ...Object.keys(detailEntries)

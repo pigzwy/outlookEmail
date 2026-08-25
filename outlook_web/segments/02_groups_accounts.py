@@ -996,6 +996,11 @@ def resolve_account_record(row: sqlite3.Row, matched_alias: str = '',
             account['imap_password'] = decrypt_data(account['imap_password'])
         except Exception:
             pass
+    if account.get('mailcom_session'):
+        try:
+            account['mailcom_session'] = decrypt_data(account['mailcom_session'])
+        except Exception:
+            pass
     account['provider'] = normalize_provider(account.get('provider'), account.get('email', ''))
     account['account_type'] = account.get('account_type') or get_provider_meta(
         account['provider'], account.get('email', '')

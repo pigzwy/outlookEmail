@@ -45,6 +45,16 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from outlook_web.runtime import default_database_path, resource_path, resolve_secret_key, runtime_root
 from outlook_web.mail_datetime import parse_mail_datetime
+from outlook_web.mailcom_service import (
+    MAILCOM_METHOD,
+    MAILCOM_PROVIDER_KEY,
+    MAILCOM_REQUEST_METHOD,
+    get_email_detail_mailcom,
+    get_emails_mailcom,
+    get_raw_email_mailcom,
+    is_mailcom_account,
+    mailcom_unsupported_action,
+)
 
 # 尝试导入 Flask-WTF CSRF 保护
 try:
@@ -627,6 +637,12 @@ MAIL_PROVIDERS = {
         "imap_port": 993,
         "account_type": "imap",
     },
+    "mailcom": {
+        "label": "mail.com",
+        "imap_host": "imap.mail.com",
+        "imap_port": 993,
+        "account_type": "imap",
+    },
     "custom": {
         "label": "自定义 IMAP",
         "imap_host": "",
@@ -652,6 +668,13 @@ DOMAIN_PROVIDER_MAP = {
     "aliyun.com": "aliyun",
     "alimail.com": "aliyun",
     "2925.com": "2925",
+    "mail.com": "mailcom",
+    "email.com": "mailcom",
+    "usa.com": "mailcom",
+    "myself.com": "mailcom",
+    "consultant.com": "mailcom",
+    "europe.com": "mailcom",
+    "asia.com": "mailcom",
 }
 
 PROVIDER_FOLDER_MAP = {
@@ -684,6 +707,11 @@ PROVIDER_FOLDER_MAP = {
         "inbox": ["INBOX", "Inbox"],
         "junkemail": ["&V4NXPnux-", "Junk", "Junk Email", "Spam", "SPAM"],
         "deleteditems": ["&XfJT0ZAB-", "Trash", "Deleted", "Deleted Items", "Deleted Messages"],
+    },
+    "mailcom": {
+        "inbox": ["INBOX", "Inbox"],
+        "junkemail": ["Spam", "Junk", "Junk Email", "SPAM"],
+        "deleteditems": ["Trash", "Deleted", "Deleted Items", "Deleted Messages"],
     },
     "_default": {
         "inbox": ["INBOX", "Inbox"],
@@ -1365,6 +1393,7 @@ def init_db():
             proxy_url TEXT DEFAULT '',
             fallback_proxy_url_1 TEXT DEFAULT '',
             fallback_proxy_url_2 TEXT DEFAULT '',
+            mailcom_session TEXT,
             last_refresh_at TIMESTAMP,
             last_refresh_status TEXT DEFAULT 'never',
             last_refresh_error TEXT,
@@ -1834,6 +1863,8 @@ def init_db():
         cursor.execute('ALTER TABLE accounts ADD COLUMN fallback_proxy_url_1 TEXT')
     if 'fallback_proxy_url_2' not in columns:
         cursor.execute('ALTER TABLE accounts ADD COLUMN fallback_proxy_url_2 TEXT')
+    if 'mailcom_session' not in columns:
+        cursor.execute('ALTER TABLE accounts ADD COLUMN mailcom_session TEXT')
     
     # 检查 groups 表是否有 is_system 列
     cursor.execute("PRAGMA table_info(groups)")
