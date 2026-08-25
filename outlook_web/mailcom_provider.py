@@ -2853,13 +2853,9 @@ class MailcomCookieProvider:
                 assembled.to = part.to
             if part.date and not assembled.date:
                 assembled.date = part.date
-            if part.body_html and (
-                not assembled.body_html or len(part.body_html) > len(assembled.body_html or "")
-            ):
+            if part.body_html and not assembled.body_html:
                 assembled.body_html = part.body_html
-            if part.body_text and (
-                not assembled.body_text or len(part.body_text) > len(assembled.body_text or "")
-            ):
+            if part.body_text and not assembled.body_text:
                 assembled.body_text = part.body_text
             if part.verification_code and not assembled.verification_code:
                 assembled.verification_code = part.verification_code
