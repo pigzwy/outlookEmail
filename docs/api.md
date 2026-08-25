@@ -26,6 +26,7 @@
 
 | 方法 | 路径 | 鉴权 | 返回类型 | 说明 |
 | --- | --- | --- | --- | --- |
+| POST | `/login` | 无 | JSON | 使用密码建立 Web Session，可选择登录有效期 |
 | GET | `/api/version-status` | Session | JSON | 当前版本与仓库版本状态 |
 | GET | `/api/csrf-token` | Session | JSON | 获取当前登录会话对应的 CSRF Token |
 | POST | `/api/extension/login` | Web 登录密码 | JSON | 浏览器扩展获取一次性登录跳转地址 |
@@ -172,6 +173,19 @@
 
 完整 API 需要先登录 Web 界面并携带 Session Cookie。
 
+### Web 登录与会话有效期
+
+调用 `POST /login` 使用 Web 登录密码建立 Session。`session_duration_days` 为可选字段，只允许 `7`、`30`、`90`、`180` 或 `permanent`，省略时默认使用 `30`：
+
+```json
+{
+  "password": "web-login-password",
+  "session_duration_days": "permanent"
+}
+```
+
+登录成功后，有限期限 Session 从成功时刻起按所选天数固定失效；后续访问不会续期。`permanent` 不设置绝对过期时间，但仍会在主动退出、登录密码修改导致会话版本轮换、SECRET_KEY 改变或浏览器清理 Cookie 后失效。显式提交其他值时返回 `400`，不会建立或覆盖登录 Session。Web 登录页会在当前浏览器本地记忆上次选择的期限，但不会保存密码、Session Cookie 或绝对过期时间。
+
 ### 浏览器扩展密码登录
 
 浏览器扩展不使用对外 API Key。扩展先调用 `POST /api/extension/login`，用 Web 登录密码换取 60 秒有效的一次性 `launch_url`；随后在浏览器标签页打开该 URL，服务端会在自身域名下写入正常 Web Session 并跳转到 Web 控制台。
@@ -199,6 +213,7 @@
 
 - `next` 可选，必须是站内路径；非法值会回退到 `/`
 - `launch_url` 只能消费一次，过期或重复打开会跳回登录页
+- 扩展登录未提供期限选择，消费票据建立的 Web Session 默认有效 30 天，且从建立 Session 时起固定计算
 - 扩展打开控制台后，后续 Web 页面仍按完整管理 API 的 Session + CSRF 规则工作
 
 ### CSRF
@@ -401,6 +416,7 @@ curl -H "X-API-Key: your-api-key" \
       "status": "active",
       "account_type": "outlook",
       "provider": "outlook",
+      "authorization_type": "graph",
       "forward_enabled": true,
       "last_refresh_at": "2026-04-09 14:20:00",
       "last_refresh_status": "success",
@@ -797,6 +813,7 @@ curl -X POST -H "X-API-Key: your-api-key" -H "Content-Type: application/json" \
 | `has_more` | 是否还有下一页 |
 | `aliases` | 账号别名列表 |
 | `alias_count` | 别名数量 |
+| `authorization_type` | Outlook OAuth 首选/最近成功通道：`graph`、`imap` 或空字符串（未设置，默认 Graph 优先） |
 | `forward_enabled` | 是否开启转发 |
 | `last_refresh_at` | 最近刷新时间 |
 | `last_refresh_status` | 最近刷新结果 |
@@ -893,6 +910,7 @@ curl -X POST -H "X-API-Key: your-api-key" -H "Content-Type: application/json" \
     "has_password": true,
     "has_imap_password": false,
     "client_id": "xxx",
+    "authorization_type": "graph",
     "refresh_token": "xxx",
     "aliases": ["alias@example.com", "login@example.com"],
     "alias_count": 2,
@@ -939,6 +957,7 @@ Content-Type: application/json
 - 支持 Outlook 账号和 IMAP 账号
 - 现在支持直接在更新账号时一起保存别名
 - `proxy_url`、`fallback_proxy_url_1`、`fallback_proxy_url_2` 未传时保留账号现有代理配置；显式传空字符串可清空账号覆盖
+- `authorization_type` 未传时保留现有通道；显式传空字符串可清空为首选 Graph。合法值为 `graph`、`imap` 或空字符串；非法值返回错误。普通 IMAP 账号始终保存为空
 
 #### 请求体常用字段
 
@@ -949,6 +968,7 @@ Content-Type: application/json
 | `client_id` | string | Outlook 必填 | Outlook Client ID |
 | `refresh_token` | string | Outlook 必填 | Outlook Refresh Token |
 | `account_type` | string | 否 | `outlook` 或 `imap` |
+| `authorization_type` | string | 否 | Outlook OAuth 首选通道：`graph`、`imap` 或空字符串；未传则保留现有值 |
 | `provider` | string | 否 | `outlook`、`auto`、`qq`、`163`、`126`、`yahoo`、`aliyun`、`custom` |
 | `imap_host` | string | 自定义 IMAP 必填 | 自定义 IMAP 服务器 |
 | `imap_port` | int | 否 | IMAP 端口 |
@@ -969,6 +989,7 @@ Content-Type: application/json
   "email": "user@outlook.com",
   "client_id": "xxx",
   "refresh_token": "xxx",
+  "authorization_type": "graph",
   "group_id": 1,
   "remark": "主账号",
   "status": "active",
@@ -1015,7 +1036,8 @@ Content-Type: application/json
   "validation": {
     "success": true,
     "status": "success",
-    "message": "Token 刷新成功"
+    "message": "Token 刷新成功",
+    "authorization_type": "graph"
   }
 }
 ```
@@ -1803,7 +1825,7 @@ Content-Type: application/json
 | 参数 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `folder` | string | 否 | 当前邮件所在文件夹，默认 `inbox` |
-| `method` | string | 否 | 优先取详情的方式，常见为 `graph`；传 `imap` 可走 Outlook OAuth IMAP 回退 |
+| `method` | string | 否 | 优先取详情的方式。若账号已记录 `authorization_type`，按该通道优先并自动回退；未记录时 `graph` 优先、传 `imap` 只走 OAuth IMAP |
 | `id_mode` | string | 否 | OAuth IMAP 消息 ID 模式，支持 `uid`、`sequence`；缺省或非法值按 `uid` 处理 |
 | `source` | string | 否 | 传 `local` 时优先返回已缓存的本地保留详情正文 |
 | `prefer_local` | bool | 否 | `1` / `true` / `yes` / `on` 等价于 `source=local` |
@@ -2262,6 +2284,7 @@ POST /api/cloudflare/channels
 | `cloudflare_ai_username_api_key_configured` | 是否已保存 Cloudflare AI API Key |
 | `cloudflare_ai_username_api_key_masked` | Cloudflare AI API Key 掩码，不返回明文 |
 | `app_timezone` | 当前系统时区，IANA 时区名，例如 `Asia/Shanghai` |
+| `mail_fetch_timeout_seconds` | 普通 Outlook/IMAP 读取邮件列表的整体超时秒数，范围 `30-300`，默认 `120` |
 | `show_account_created_at` | 是否在邮箱列表展示创建时间 |
 | `show_account_sort_order` | 是否在邮箱列表展示自定义排序值 |
 | `active_skin_id` | 当前实际生效皮肤 ID；配置不可用时会返回 `classic` |
@@ -2307,6 +2330,7 @@ POST /api/cloudflare/channels
 | `use_cron_schedule` | bool | 是否使用 Cron 调度 |
 | `enable_scheduled_refresh` | bool | 是否开启定时刷新 |
 | `app_timezone` | string | 系统时区，使用 IANA 时区名，例如 `Asia/Shanghai` |
+| `mail_fetch_timeout_seconds` | int | 普通 Outlook/IMAP 邮件列表整体获取超时，范围 `30-300`；未传则保留现有值。尚未保存该设置时回退环境变量 `MAIL_FETCH_OVERALL_TIMEOUT`，再回退 `120` |
 | `show_account_created_at` | bool | 是否在邮箱列表展示创建时间 |
 | `show_account_sort_order` | bool | 是否在邮箱列表展示自定义排序值 |
 | `active_skin_id` | string | 当前系统级外观皮肤 ID；所有登录设备共用同一设置 |

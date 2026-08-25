@@ -33,10 +33,11 @@ from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from email.header import decode_header
 from pathlib import Path, PurePosixPath
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 from urllib.parse import quote, urlparse, unquote
 from zoneinfo import ZoneInfo
-from flask import Flask, render_template, request, jsonify, g, session, redirect, url_for, Response, make_response
+from flask import Flask, render_template, request, jsonify, g, session, redirect, url_for, Response, make_response, has_app_context
+from flask.sessions import SecureCookieSessionInterface
 from functools import wraps
 import requests
 from cryptography.fernet import Fernet
@@ -71,8 +72,8 @@ if not secret_key:
         "Generate one with: python -c 'import secrets; print(secrets.token_hex(32))'"
     )
 app.secret_key = secret_key
-# 设置 session 过期时间（默认 7 天）
-app.config['PERMANENT_SESSION_LIFETIME'] = 60 * 60 * 24 * 7  # 7 天
+# 设置有限期限 Session Cookie 的传输层上限；实际登录有效期由每个 Session 控制，永久会话使用独立的最长 Cookie 期限。
+app.config['PERMANENT_SESSION_LIFETIME'] = 60 * 60 * 24 * 180  # 180 天
 
 # Session Cookie 配置（适用于 HTTPS 代理环境）
 app.config['SESSION_COOKIE_HTTPONLY'] = True
@@ -172,11 +173,22 @@ IMAP_SERVER_NEW = "outlook.live.com"
 IMAP_PORT = 993
 HTTP_REQUEST_TIMEOUT = int(os.getenv("HTTP_REQUEST_TIMEOUT", "30"))
 IMAP_TIMEOUT = int(os.getenv("IMAP_TIMEOUT", "45"))
+MAIL_FETCH_TIMEOUT_SETTING_KEY = 'mail_fetch_timeout_seconds'
+MAIL_FETCH_TIMEOUT_DEFAULT_SECONDS = 120
+MAIL_FETCH_TIMEOUT_MIN_SECONDS = 30
+MAIL_FETCH_TIMEOUT_MAX_SECONDS = 300
 DEFAULT_APP_TIMEZONE = (os.getenv("APP_TIMEZONE", "Asia/Shanghai") or "Asia/Shanghai").strip()
 FALLBACK_APP_TIMEZONE = "UTC"
-MAIL_FETCH_OVERALL_TIMEOUT = int(
-    os.getenv("MAIL_FETCH_OVERALL_TIMEOUT", str(max(HTTP_REQUEST_TIMEOUT, IMAP_TIMEOUT) + 5))
-)
+try:
+    MAIL_FETCH_OVERALL_TIMEOUT = max(
+        MAIL_FETCH_TIMEOUT_MIN_SECONDS,
+        min(
+            MAIL_FETCH_TIMEOUT_MAX_SECONDS,
+            int(os.getenv("MAIL_FETCH_OVERALL_TIMEOUT", str(MAIL_FETCH_TIMEOUT_DEFAULT_SECONDS))),
+        )
+    )
+except (TypeError, ValueError):
+    MAIL_FETCH_OVERALL_TIMEOUT = MAIL_FETCH_TIMEOUT_DEFAULT_SECONDS
 
 try:
     with resource_path('VERSION').open('r', encoding='utf-8') as version_file:
@@ -779,6 +791,21 @@ OAUTH_SCOPES = [
     "https://graph.microsoft.com/User.Read",
 ]
 
+OUTLOOK_AUTHORIZATION_TYPES = frozenset({'graph', 'imap'})
+_OUTLOOK_AUTHORIZATION_UNSET_ALIASES = frozenset({'unset', 'unknown', 'none', 'empty', '未设置', '未知'})
+
+
+def normalize_outlook_authorization_type(value: Any, *, strict: bool = False) -> str:
+    """规范化 Outlook OAuth 邮件授权通道；空字符串表示未设置。"""
+    text = str(value or '').strip().lower()
+    if not text or text in _OUTLOOK_AUTHORIZATION_UNSET_ALIASES:
+        return ''
+    if text in OUTLOOK_AUTHORIZATION_TYPES:
+        return text
+    if strict:
+        raise ValueError(f'非法 Outlook 授权类型: {value}')
+    return ''
+
 
 def infer_provider_from_email(email_addr: str) -> str:
     if not email_addr or '@' not in email_addr:
@@ -1329,6 +1356,7 @@ def init_db():
             status TEXT DEFAULT 'active',
             account_type TEXT DEFAULT 'outlook',
             provider TEXT DEFAULT 'outlook',
+            authorization_type TEXT NOT NULL DEFAULT '',
             imap_host TEXT,
             imap_port INTEGER DEFAULT 993,
             imap_password TEXT,
@@ -1788,6 +1816,8 @@ def init_db():
         cursor.execute("ALTER TABLE accounts ADD COLUMN account_type TEXT DEFAULT 'outlook'")
     if 'provider' not in columns:
         cursor.execute("ALTER TABLE accounts ADD COLUMN provider TEXT DEFAULT 'outlook'")
+    if 'authorization_type' not in columns:
+        cursor.execute("ALTER TABLE accounts ADD COLUMN authorization_type TEXT NOT NULL DEFAULT ''")
     if 'imap_host' not in columns:
         cursor.execute('ALTER TABLE accounts ADD COLUMN imap_host TEXT')
     if 'imap_port' not in columns:
@@ -2628,6 +2658,38 @@ def get_all_settings() -> Dict[str, str]:
     return {row['key']: row['value'] for row in rows}
 
 
+def parse_mail_fetch_timeout_seconds(value: Any) -> Optional[int]:
+    """解析用户配置的邮件获取超时秒数。"""
+    try:
+        seconds = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    if seconds < MAIL_FETCH_TIMEOUT_MIN_SECONDS or seconds > MAIL_FETCH_TIMEOUT_MAX_SECONDS:
+        return None
+    return seconds
+
+
+def normalize_mail_fetch_timeout_seconds(value: Any, default: int = MAIL_FETCH_TIMEOUT_DEFAULT_SECONDS) -> int:
+    """将邮件获取超时秒数限制在安全范围内。"""
+    try:
+        seconds = int(str(value).strip())
+    except (TypeError, ValueError):
+        seconds = default
+    return max(MAIL_FETCH_TIMEOUT_MIN_SECONDS, min(MAIL_FETCH_TIMEOUT_MAX_SECONDS, seconds))
+
+
+def get_mail_fetch_timeout_seconds() -> int:
+    """读取当前邮件获取整体超时秒数，优先使用系统设置，兼容环境变量。"""
+    configured_value = ''
+    if has_app_context():
+        configured_value = str(get_setting(MAIL_FETCH_TIMEOUT_SETTING_KEY, '') or '').strip()
+    if configured_value:
+        return normalize_mail_fetch_timeout_seconds(configured_value)
+    return normalize_mail_fetch_timeout_seconds(
+        os.getenv('MAIL_FETCH_OVERALL_TIMEOUT', MAIL_FETCH_TIMEOUT_DEFAULT_SECONDS)
+    )
+
+
 # ==================== 皮肤管理 ====================
 
 class SkinValidationError(ValueError):
@@ -3281,6 +3343,27 @@ def verify_login_password(password: str) -> bool:
 
 LOGIN_SESSION_VERSION_SETTING_KEY = 'login_session_version'
 DEFAULT_LOGIN_SESSION_VERSION = '0'
+LOGIN_SESSION_DURATION_OPTIONS = (7, 30, 90, 180)
+LOGIN_SESSION_PERMANENT_OPTION = 'permanent'
+DEFAULT_LOGIN_SESSION_DURATION_DAYS = 30
+LOGIN_SESSION_EXPIRATION_KEY = 'login_expires_at'
+
+
+class WebLoginSessionInterface(SecureCookieSessionInterface):
+    """为永久登录会话生成不会因应用默认期限提前失效的 Cookie。"""
+
+    def get_expiration_time(self, app, session):
+        if session.get(LOGIN_SESSION_EXPIRATION_KEY) == LOGIN_SESSION_PERMANENT_OPTION:
+            return datetime.max.replace(tzinfo=timezone.utc)
+        return super().get_expiration_time(app, session)
+
+
+app.session_interface = WebLoginSessionInterface()
+
+
+def get_login_session_now() -> float:
+    """获取登录 Session 使用的当前时间，便于统一校验和测试。"""
+    return time.time()
 
 
 def get_login_session_version() -> str:
@@ -3307,10 +3390,45 @@ def bind_login_session_version(version: Optional[str] = None) -> None:
     session.modified = True
 
 
-def establish_web_login_session() -> None:
-    """建立已登录 Web Session，并绑定当前会话版本。"""
+def normalize_login_session_duration(
+    value: Any,
+    allow_default: bool = False,
+) -> Optional[Union[int, str]]:
+    """规范化登录有效期，只允许固定选项或永久有效。"""
+    if value is None:
+        return DEFAULT_LOGIN_SESSION_DURATION_DAYS if allow_default else None
+    if isinstance(value, str) and value.strip().lower() == LOGIN_SESSION_PERMANENT_OPTION:
+        return LOGIN_SESSION_PERMANENT_OPTION
+    if isinstance(value, bool) or isinstance(value, float):
+        return None
+
+    try:
+        duration_days = int(value)
+    except (TypeError, ValueError):
+        return None
+
+    if duration_days not in LOGIN_SESSION_DURATION_OPTIONS:
+        return None
+    return duration_days
+
+
+def establish_web_login_session(duration_days: Optional[Union[int, str]] = None) -> None:
+    """建立已登录 Web Session，并绑定固定或永久的登录期限。"""
+    normalized_duration = normalize_login_session_duration(
+        duration_days,
+        allow_default=duration_days is None,
+    )
+    if normalized_duration is None:
+        raise ValueError('登录有效期无效')
+
     session['logged_in'] = True
     session.permanent = True
+    if normalized_duration == LOGIN_SESSION_PERMANENT_OPTION:
+        session[LOGIN_SESSION_EXPIRATION_KEY] = LOGIN_SESSION_PERMANENT_OPTION
+    else:
+        session[LOGIN_SESSION_EXPIRATION_KEY] = (
+            get_login_session_now() + normalized_duration * 24 * 60 * 60
+        )
     bind_login_session_version()
 
 
@@ -3318,19 +3436,38 @@ def clear_web_login_session() -> None:
     """清除 Web 登录状态。"""
     session.pop('logged_in', None)
     session.pop('login_session_version', None)
+    session.pop(LOGIN_SESSION_EXPIRATION_KEY, None)
     session.modified = True
 
 
 def is_web_login_session_valid() -> bool:
-    """校验当前 Web Session 是否仍有效（含改密后的版本轮换）。"""
+    """校验当前 Web Session 是否仍有效（含版本轮换和绝对过期时间）。"""
     if not session.get('logged_in'):
         return False
     expected = get_login_session_version()
     actual = session.get('login_session_version')
     # 升级前未写入 version 的旧会话：仅在尚未发生密码轮换时保留
     if actual is None:
-        return expected == DEFAULT_LOGIN_SESSION_VERSION
-    return str(actual) == expected
+        if expected != DEFAULT_LOGIN_SESSION_VERSION:
+            return False
+    elif str(actual) != expected:
+        return False
+
+    expires_at = session.get(LOGIN_SESSION_EXPIRATION_KEY)
+    if expires_at == LOGIN_SESSION_PERMANENT_OPTION:
+        return True
+    if expires_at is None:
+        # 兼容升级前已存在的 Session：从首次通过新校验时开始计默认 30 天。
+        session[LOGIN_SESSION_EXPIRATION_KEY] = (
+            get_login_session_now() + DEFAULT_LOGIN_SESSION_DURATION_DAYS * 24 * 60 * 60
+        )
+        session.modified = True
+        return True
+
+    try:
+        return get_login_session_now() < float(expires_at)
+    except (TypeError, ValueError):
+        return False
 
 
 def get_gptmail_api_key() -> str:

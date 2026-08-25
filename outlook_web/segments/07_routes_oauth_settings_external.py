@@ -156,7 +156,7 @@ def api_reauthorize_account(account_id):
     db = get_db()
     account = db.execute(
         '''
-        SELECT id, email, client_id, refresh_token, group_id, account_type, provider,
+        SELECT id, email, client_id, refresh_token, group_id, account_type, provider, authorization_type,
                proxy_url, fallback_proxy_url_1, fallback_proxy_url_2
         FROM accounts
         WHERE id = ?
@@ -224,7 +224,7 @@ def api_reauthorize_account(account_id):
 
     refreshed_account = db.execute(
         '''
-        SELECT id, email, client_id, refresh_token, group_id, account_type, provider,
+        SELECT id, email, client_id, refresh_token, group_id, account_type, provider, authorization_type,
                proxy_url, fallback_proxy_url_1, fallback_proxy_url_2
         FROM accounts
         WHERE id = ?
@@ -242,7 +242,8 @@ def api_reauthorize_account(account_id):
             'validation': {
                 'success': True,
                 'status': 'success',
-                'message': validation_result.get('message') or 'Token 刷新成功'
+                'message': validation_result.get('message') or 'Token 刷新成功',
+                'authorization_type': validation_result.get('authorization_type') or '',
             }
         })
 
@@ -610,6 +611,7 @@ def api_get_settings():
     settings['show_account_created_at'] = get_setting('show_account_created_at', 'true')
     settings['show_account_sort_order'] = get_setting('show_account_sort_order', 'false')
     settings['show_group_id'] = get_setting('show_group_id', 'true')
+    settings['mail_fetch_timeout_seconds'] = str(get_mail_fetch_timeout_seconds())
     settings['normal_mail_local_retention_enabled'] = get_setting(
         'normal_mail_local_retention_enabled',
         'false',
@@ -1044,6 +1046,17 @@ def api_update_settings():
                 errors.append('保存转发垃圾箱邮件失败')
         else:
             errors.append('转发垃圾箱邮件必须是 true 或 false')
+
+    if MAIL_FETCH_TIMEOUT_SETTING_KEY in data:
+        mail_fetch_timeout_seconds = parse_mail_fetch_timeout_seconds(data[MAIL_FETCH_TIMEOUT_SETTING_KEY])
+        if mail_fetch_timeout_seconds is None:
+            errors.append(
+                f'邮件获取超时必须在 {MAIL_FETCH_TIMEOUT_MIN_SECONDS}-{MAIL_FETCH_TIMEOUT_MAX_SECONDS} 秒之间'
+            )
+        elif set_setting(MAIL_FETCH_TIMEOUT_SETTING_KEY, str(mail_fetch_timeout_seconds)):
+            updated.append('邮件获取超时')
+        else:
+            errors.append('保存邮件获取超时失败')
 
     if 'forward_channels' in data:
         forward_channels = normalize_forward_channel_settings(data['forward_channels'])
