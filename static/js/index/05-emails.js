@@ -1608,6 +1608,34 @@
             return !lower.startsWith('javascript:') && !lower.startsWith('data:') && !lower.startsWith('vbscript:');
         }
 
+        function resolveCopyableEmailHref(href) {
+            const raw = String(href || '').trim();
+            if (!isCopyableEmailHref(raw)) {
+                return '';
+            }
+            try {
+                const parsed = new URL(raw, window.location.origin);
+                const wrapped = parsed.searchParams.get('redirectUrl')
+                    || parsed.searchParams.get('redirect_url')
+                    || parsed.searchParams.get('redirect');
+                if (wrapped) {
+                    const decoded = String(wrapped).trim();
+                    if (/^https?:\/\//i.test(decoded) || decoded.toLowerCase().startsWith('mailto:')) {
+                        return decoded;
+                    }
+                }
+                if (parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'mailto:') {
+                    if (parsed.origin === window.location.origin && raw.startsWith('/')) {
+                        return raw;
+                    }
+                    return parsed.href;
+                }
+            } catch (e) {
+                // keep raw href
+            }
+            return raw;
+        }
+
         function bindEmailBodyLinks(iframe) {
             try {
                 const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
@@ -1635,8 +1663,8 @@
                 }
 
                 iframeDoc.querySelectorAll('a[href]').forEach((anchor) => {
-                    const href = (anchor.getAttribute('href') || '').trim();
-                    if (isCopyableEmailHref(href) && !anchor.getAttribute('title')) {
+                    const href = resolveCopyableEmailHref(anchor.getAttribute('href'));
+                    if (href && !anchor.getAttribute('title')) {
                         anchor.setAttribute('title', `点击复制链接：${href}`);
                     }
                 });
@@ -1646,13 +1674,13 @@
                     if (!anchor) {
                         return;
                     }
-                    const href = (anchor.getAttribute('href') || '').trim();
+                    const href = resolveCopyableEmailHref(anchor.getAttribute('href'));
                     event.preventDefault();
                     event.stopPropagation();
                     if (typeof event.stopImmediatePropagation === 'function') {
                         event.stopImmediatePropagation();
                     }
-                    if (!isCopyableEmailHref(href)) {
+                    if (!href) {
                         return;
                     }
                     copyTextToClipboard(href, '链接已复制');
