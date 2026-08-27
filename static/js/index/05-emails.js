@@ -730,6 +730,7 @@
                 from: pick(detail?.from, listItem.from),
                 to: pick(detail?.to, listItem.to),
                 date: pick(detail?.date, listItem.date),
+                verification_code: pick(detail?.verification_code, listItem.verification_code),
                 folder: detail?.folder || listItem.folder,
                 id_mode: detail?.id_mode || listItem.id_mode || ''
             };
@@ -999,6 +1000,7 @@
                                     ${recipientDisplayLabel ? `<div class="email-recipient" title="${escapeHtml(recipientDisplayLabel)}">${escapeHtml(recipientDisplayLabel)}</div>` : ''}
                                 </div>
                                 ${hasAttachments ? '<span class="email-attachment-indicator" title="含附件" aria-label="含附件">📎</span>' : ''}
+                                ${email.verification_code ? `<button type="button" class="email-code-badge" data-copy-code="${escapeHtml(String(email.verification_code))}" title="点击复制验证码">验证码 ${escapeHtml(String(email.verification_code))}</button>` : ''}
                                 ${sourceLabel ? `<span class="email-folder-badge email-folder-badge--${escapeHtml(String(email.folder || '').toLowerCase())}">${escapeHtml(sourceLabel)}</span>` : ''}
                             </div>
                             <div class="email-date">${formatDate(email.date)}</div>
@@ -1013,6 +1015,14 @@
         }
 
         function handleEmailListClick(event) {
+            const codeBadge = event.target.closest('.email-code-badge[data-copy-code]');
+            if (codeBadge) {
+                event.stopPropagation();
+                event.preventDefault();
+                copyTextToClipboard(codeBadge.dataset.copyCode || '', `已复制验证码：${codeBadge.dataset.copyCode || ''}`);
+                return;
+            }
+
             const checkboxWrapper = event.target.closest('.email-checkbox-wrapper[data-email-id]');
             if (checkboxWrapper) {
                 event.stopPropagation();
@@ -1436,6 +1446,12 @@
             trustCheckbox.checked = false;
             isTrustedMode = false;
             updateTrustToggleState(trustCheckbox);
+            const remoteImagesCheckbox = document.getElementById('remoteImagesCheckbox');
+            if (remoteImagesCheckbox) {
+                remoteImagesCheckbox.checked = false;
+            }
+            allowRemoteImages = false;
+            updateRemoteImagesToggleState(remoteImagesCheckbox);
 
             // 显示工具栏
             document.getElementById('emailDetailToolbar').style.display = 'flex';
@@ -1545,6 +1561,14 @@
                     <span class="email-detail-meta-label">时间</span>
                     <span class="email-detail-meta-value">${formatDate(email.date)}</span>
                 </div>
+                ${email.verification_code ? `
+                <div class="email-detail-meta-row">
+                    <span class="email-detail-meta-label">验证码</span>
+                    <span class="email-detail-meta-value">
+                        <button type="button" class="email-code-badge" data-copy-code="${escapeHtml(String(email.verification_code))}" onclick="copyTextToClipboard(this.dataset.copyCode, '已复制验证码：' + this.dataset.copyCode)">${escapeHtml(String(email.verification_code))}</button>
+                    </span>
+                </div>
+                ` : ''}
             `;
 
             const detailHeader = compactMobileMeta
@@ -1599,11 +1623,15 @@
                         });
                     }
 
+                    const showRemoteImages = isTrustedMode || allowRemoteImages;
+                    sanitizedBody = rewriteRemoteEmailImages(sanitizedBody, showRemoteImages);
+
                     const htmlContent = `
                         <!DOCTYPE html>
                         <html>
                         <head>
                             <meta charset="UTF-8">
+                            <meta http-equiv="Content-Security-Policy" content="${buildEmailBodyCsp(showRemoteImages)}">
                             <style>
                                 body {
                                     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
@@ -1634,6 +1662,20 @@
                     iframe.srcdoc = htmlContent;
                 }
             }
+        }
+
+        function rewriteRemoteEmailImages(html, allow) {
+            if (allow || !html) {
+                return html;
+            }
+            return String(html)
+                .replace(/(<img\b[^>]*\bsrc\s*=\s*)(['"])(https?:\/\/[^'"]+)\2/gi, '$1$2$2')
+                .replace(/(<img\b[^>]*\bsrc\s*=\s*)(https?:\/\/[^\s>]+)/gi, '$1""');
+        }
+
+        function buildEmailBodyCsp(allowImages) {
+            const imgSrc = allowImages ? "img-src data: https: http: cid:" : "img-src data: cid:";
+            return `default-src 'none'; ${imgSrc}; style-src 'unsafe-inline'; object-src 'none'; base-uri 'none'; form-action 'none';`;
         }
 
         function isCopyableEmailHref(href) {
@@ -1867,6 +1909,18 @@
         }
 
         // 切换信任模式
+        function updateRemoteImagesToggleState(checkbox) {
+            checkbox?.closest('.email-trust-toggle')?.classList.toggle('is-active', !!checkbox?.checked);
+        }
+
+        function toggleRemoteImages(checkbox) {
+            allowRemoteImages = !!checkbox?.checked;
+            updateRemoteImagesToggleState(checkbox);
+            if (currentEmailDetail) {
+                renderEmailDetail(currentEmailDetail);
+            }
+        }
+
         function updateTrustToggleState(checkbox) {
             checkbox?.closest('.email-trust-toggle')?.classList.toggle('is-active', !!checkbox?.checked);
         }

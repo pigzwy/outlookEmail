@@ -2033,10 +2033,14 @@
             qq: 'QQ',
             '163': '163',
             '126': '126',
+            yeah: 'yeah.net',
             yahoo: 'Yahoo',
             aliyun: 'Aliyun',
             '2925': '2925邮箱',
             mailcom: 'mail.com',
+            icloud: 'iCloud',
+            gmx: 'GMX',
+            zoho: 'Zoho',
             custom: 'Custom IMAP'
         };
 

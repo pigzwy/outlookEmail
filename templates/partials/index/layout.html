@@ -431,6 +431,15 @@
                         </svg>
                         <span class="email-detail-action-btn__text">显示邮件源</span>
                     </button>
+                    <label class="email-trust-toggle" title="显示远程图片" aria-label="显示远程图片">
+                        <input type="checkbox" id="remoteImagesCheckbox" onchange="toggleRemoteImages(this)">
+                        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+                            <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+                            <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                            <path d="M21 15l-5-5L5 21"></path>
+                        </svg>
+                        <span style="user-select: none;">显示图片</span>
+                    </label>
                     <label class="email-trust-toggle" title="信任此邮件" aria-label="信任此邮件">
                         <input type="checkbox" id="trustEmailCheckbox" onchange="toggleTrustMode(this)">
                         <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">

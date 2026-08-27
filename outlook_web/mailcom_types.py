@@ -97,49 +97,7 @@ class HealthResult:
     detail: str | None = None
 
 
-_DIGIT_NEAR_CODE = re.compile(
-    r"(?:验证码|校验码|confirmation\s*code|verification\s*code|security\s*code|"
-    r"access\s*code|login\s*code|\botp\b|(?<![A-Za-z])code(?![A-Za-z]))"
-    r"[^\d]{0,48}(\d{4,8})",
-    re.IGNORECASE | re.DOTALL,
-)
-_HTML_TAG = re.compile(r"<[^>]+>")
-
-
-def extract_verification_code(
-    subject: str = "",
-    body_text: str = "",
-    body_html: str = "",
-    custom_regex: str | None = None,
-) -> str | None:
-    text = "\n".join(
-        [
-            str(subject or ""),
-            str(body_text or ""),
-            _HTML_TAG.sub(" ", str(body_html or "")),
-        ]
-    )
-    if custom_regex:
-        try:
-            match = re.search(custom_regex, text)
-            if match:
-                return match.group(1) if match.lastindex else match.group(0)
-        except re.error:
-            pass
-    match = _DIGIT_NEAR_CODE.search(text)
-    return match.group(1) if match else None
-
-
-def attach_verification_code(messages: list[Message]) -> list[Message]:
-    for message in messages:
-        if message.verification_code:
-            continue
-        message.verification_code = extract_verification_code(
-            subject=message.subject,
-            body_text=message.body_text,
-            body_html=message.body_html,
-        )
-    return messages
+from outlook_web.verification_code import attach_verification_code, extract_verification_code
 
 
 def filter_messages_by_time(

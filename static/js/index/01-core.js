@@ -38,6 +38,7 @@
         let currentEmailId = null; // 当前选中的邮件 ID
         let currentEmailDetail = null; // 当前查看的邮件详细数据
         let isTrustedMode = false; // 是否处于信任模式（不过滤 HTML）
+        let allowRemoteImages = false; // 显示远程图片（仍过滤脚本）
         let oauthPreviewAccount = null;
         const UNTAGGED_TAG_FILTER_KEY = '__untagged__';
         let selectedTagFilters = new Set();

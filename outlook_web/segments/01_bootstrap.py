@@ -619,6 +619,12 @@ MAIL_PROVIDERS = {
         "imap_port": 993,
         "account_type": "imap",
     },
+    "yeah": {
+        "label": "yeah.net",
+        "imap_host": "imap.yeah.net",
+        "imap_port": 993,
+        "account_type": "imap",
+    },
     "yahoo": {
         "label": "Yahoo",
         "imap_host": "imap.mail.yahoo.com",
@@ -640,6 +646,24 @@ MAIL_PROVIDERS = {
     "mailcom": {
         "label": "mail.com",
         "imap_host": "imap.mail.com",
+        "imap_port": 993,
+        "account_type": "imap",
+    },
+    "icloud": {
+        "label": "iCloud",
+        "imap_host": "imap.mail.me.com",
+        "imap_port": 993,
+        "account_type": "imap",
+    },
+    "gmx": {
+        "label": "GMX",
+        "imap_host": "imap.gmx.com",
+        "imap_port": 993,
+        "account_type": "imap",
+    },
+    "zoho": {
+        "label": "Zoho",
+        "imap_host": "imap.zoho.com",
         "imap_port": 993,
         "account_type": "imap",
     },
@@ -675,6 +699,16 @@ DOMAIN_PROVIDER_MAP = {
     "consultant.com": "mailcom",
     "europe.com": "mailcom",
     "asia.com": "mailcom",
+    "icloud.com": "icloud",
+    "me.com": "icloud",
+    "mac.com": "icloud",
+    "gmx.com": "gmx",
+    "gmx.net": "gmx",
+    "gmx.de": "gmx",
+    "zoho.com": "zoho",
+    "zohomail.com": "zoho",
+    "yeah.net": "yeah",
+    "ymail.com": "yahoo",
 }
 
 PROVIDER_FOLDER_MAP = {

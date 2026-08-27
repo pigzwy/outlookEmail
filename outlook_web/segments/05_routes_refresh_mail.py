@@ -2461,6 +2461,15 @@ def normalize_email_list_item(item: Dict[str, Any], folder: str) -> Dict[str, An
     row['body_preview'] = row.get('body_preview', '')
     row['folder'] = row.get('folder') or folder
     row['id_mode'] = row.get('id_mode', '')
+    code = str(row.get('verification_code') or '').strip()
+    if not code:
+        from outlook_web.verification_code import extract_verification_code
+        code = extract_verification_code(
+            subject=row.get('subject') or '',
+            body_preview=row.get('body_preview') or '',
+            body_html=row.get('body') or '',
+        ) or ''
+    row['verification_code'] = code
     return row
 
 
