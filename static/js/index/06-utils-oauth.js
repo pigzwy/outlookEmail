@@ -2,18 +2,32 @@
 
         // ==================== 工具函数 ====================
 
-        // 格式化日期
+        function parseEmailDate(dateStr) {
+            if (dateStr === undefined || dateStr === null || dateStr === '') return null;
+            if (typeof dateStr === 'number' || /^\d+$/.test(String(dateStr))) {
+                const timestamp = Number(dateStr);
+                const date = new Date(timestamp < 1000000000000 ? timestamp * 1000 : timestamp);
+                return isNaN(date.getTime()) ? null : date;
+            }
+
+            const raw = String(dateStr).trim();
+            let date = new Date(raw);
+            if (!isNaN(date.getTime())) return date;
+
+            // mail.com lightmailer: "Monday, August 24, 2026 at 5:07 PM"
+            const normalized = raw
+                .replace(/\s+at\s+/i, ' ')
+                .replace(/^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s+/i, '');
+            date = new Date(normalized);
+            return isNaN(date.getTime()) ? null : date;
+        }
+
+        // 格式化日期：与 Outlook / IMAP 列表一致（今天 HH:MM 或 2026年8月24日 HH:MM）
         function formatDate(dateStr) {
             if (!dateStr) return '';
             try {
-                let normalizedDate = dateStr;
-                if (typeof dateStr === 'number' || /^\d+$/.test(String(dateStr))) {
-                    const timestamp = Number(dateStr);
-                    normalizedDate = timestamp < 1000000000000 ? timestamp * 1000 : timestamp;
-                }
-
-                const date = new Date(normalizedDate);
-                if (isNaN(date.getTime())) return dateStr;
+                const date = parseEmailDate(dateStr);
+                if (!date) return dateStr;
 
                 const now = new Date();
                 const timeZone = getAppTimeZone();

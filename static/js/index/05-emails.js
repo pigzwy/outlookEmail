@@ -965,6 +965,44 @@
             });
         }
 
+        function isPlaceholderEmailHeader(value) {
+            const text = String(value || '').trim();
+            if (!text) {
+                return true;
+            }
+            const lower = text.toLowerCase();
+            return text === '无主题'
+                || text === '未知'
+                || text === '未知发件人'
+                || text === '-'
+                || lower === '(no subject)'
+                || lower === 'no subject'
+                || lower === 'unknown';
+        }
+
+        function mergeEmailDetailWithListItem(detail, listItem) {
+            if (!listItem) {
+                return detail;
+            }
+            const pick = (detailValue, listValue) => {
+                const listed = String(listValue || '').trim();
+                if (listed && isPlaceholderEmailHeader(detailValue)) {
+                    return listValue;
+                }
+                return detailValue;
+            };
+            return {
+                ...detail,
+                subject: pick(detail?.subject, listItem.subject),
+                from: pick(detail?.from, listItem.from),
+                to: pick(detail?.to, listItem.to),
+                date: pick(detail?.date, listItem.date),
+                verification_code: pick(detail?.verification_code, listItem.verification_code),
+                folder: detail?.folder || listItem.folder,
+                id_mode: detail?.id_mode || listItem.id_mode || ''
+            };
+        }
+
         function buildEmailDetailRequestUrl(messageId, folder, selectedEmail = {}) {
             const query = new URLSearchParams({
                 method: getCurrentEmailRemoteActionMethod(selectedEmail),
@@ -1229,6 +1267,7 @@
                                     ${recipientDisplayLabel ? `<div class="email-recipient" title="${escapeHtml(recipientDisplayLabel)}">${escapeHtml(recipientDisplayLabel)}</div>` : ''}
                                 </div>
                                 ${hasAttachments ? '<span class="email-attachment-indicator" title="含附件" aria-label="含附件">📎</span>' : ''}
+                                ${email.verification_code ? `<button type="button" class="email-code-badge" data-copy-code="${escapeHtml(String(email.verification_code))}" title="点击复制验证码">验证码 ${escapeHtml(String(email.verification_code))}</button>` : ''}
                                 ${sourceLabel ? `<span class="email-folder-badge email-folder-badge--${escapeHtml(String(email.folder || '').toLowerCase())}">${escapeHtml(sourceLabel)}</span>` : ''}
                             </div>
                             <div class="email-date">${formatDate(email.date)}</div>
@@ -1243,6 +1282,14 @@
         }
 
         function handleEmailListClick(event) {
+            const codeBadge = event.target.closest('.email-code-badge[data-copy-code]');
+            if (codeBadge) {
+                event.stopPropagation();
+                event.preventDefault();
+                copyTextToClipboard(codeBadge.dataset.copyCode || '', `已复制验证码：${codeBadge.dataset.copyCode || ''}`);
+                return;
+            }
+
             const checkboxWrapper = event.target.closest('.email-checkbox-wrapper[data-email-id]');
             if (checkboxWrapper) {
                 event.stopPropagation();
@@ -1666,6 +1713,12 @@
             trustCheckbox.checked = false;
             isTrustedMode = false;
             updateTrustToggleState(trustCheckbox);
+            const remoteImagesCheckbox = document.getElementById('remoteImagesCheckbox');
+            if (remoteImagesCheckbox) {
+                remoteImagesCheckbox.checked = false;
+            }
+            allowRemoteImages = false;
+            updateRemoteImagesToggleState(remoteImagesCheckbox);
 
             // 显示工具栏
             document.getElementById('emailDetailToolbar').style.display = 'flex';
@@ -1688,11 +1741,11 @@
                 const data = await response.json();
 
                 if (data.success) {
-                    currentEmailDetail = {
+                    currentEmailDetail = mergeEmailDetailWithListItem({
                         ...data.email,
                         folder: requestFolder,
                         id_mode: data.email?.id_mode || selectedEmail?.id_mode || ''
-                    };
+                    }, selectedEmail);
                     renderEmailDetail(currentEmailDetail);
                     if (selectedEmail?.is_read === false) {
                         void requestMarkEmailsAsRead([{
@@ -1775,6 +1828,14 @@
                     <span class="email-detail-meta-label">时间</span>
                     <span class="email-detail-meta-value">${formatDate(email.date)}</span>
                 </div>
+                ${email.verification_code ? `
+                <div class="email-detail-meta-row">
+                    <span class="email-detail-meta-label">验证码</span>
+                    <span class="email-detail-meta-value">
+                        <button type="button" class="email-code-badge" data-copy-code="${escapeHtml(String(email.verification_code))}" onclick="copyTextToClipboard(this.dataset.copyCode, '已复制验证码：' + this.dataset.copyCode)">${escapeHtml(String(email.verification_code))}</button>
+                    </span>
+                </div>
+                ` : ''}
             `;
 
             const detailHeader = compactMobileMeta
@@ -1829,11 +1890,15 @@
                         });
                     }
 
+                    const showRemoteImages = isTrustedMode || allowRemoteImages;
+                    sanitizedBody = rewriteRemoteEmailImages(sanitizedBody, showRemoteImages);
+
                     const htmlContent = `
                         <!DOCTYPE html>
                         <html>
                         <head>
                             <meta charset="UTF-8">
+                            <meta http-equiv="Content-Security-Policy" content="${buildEmailBodyCsp(showRemoteImages)}">
                             <style>
                                 body {
                                     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
@@ -1843,6 +1908,8 @@
                                     margin: 0;
                                     padding: 0;
                                     background-color: #ffffff;
+                                    -webkit-user-select: text;
+                                    user-select: text;
                                 }
                                 img {
                                     max-width: 100%;
@@ -1850,6 +1917,9 @@
                                 }
                                 a {
                                     color: #0078d4;
+                                    -webkit-user-select: text;
+                                    user-select: text;
+                                    cursor: copy;
                                 }
                             </style>
                         </head>
@@ -1858,6 +1928,137 @@
                     `;
                     iframe.srcdoc = htmlContent;
                 }
+            }
+        }
+
+        function rewriteRemoteEmailImages(html, allow) {
+            if (allow || !html) {
+                return html;
+            }
+            return String(html)
+                .replace(/(<img\b[^>]*\bsrc\s*=\s*)(['"])(https?:\/\/[^'"]+)\2/gi, '$1$2$2')
+                .replace(/(<img\b[^>]*\bsrc\s*=\s*)(https?:\/\/[^\s>]+)/gi, '$1""');
+        }
+
+        function buildEmailBodyCsp(allowImages) {
+            const imgSrc = allowImages ? "img-src data: https: http: cid:" : "img-src data: cid:";
+            return `default-src 'none'; ${imgSrc}; style-src 'unsafe-inline'; object-src 'none'; base-uri 'none'; form-action 'none';`;
+        }
+
+        function isCopyableEmailHref(href) {
+            const value = String(href || '').trim();
+            if (!value || value.startsWith('#')) {
+                return false;
+            }
+            const lower = value.toLowerCase();
+            return !lower.startsWith('javascript:') && !lower.startsWith('data:') && !lower.startsWith('vbscript:');
+        }
+
+        function formatCopiedLinkToast(href) {
+            const value = String(href || '').trim();
+            if (!value) {
+                return '链接已复制';
+            }
+            if (value.length <= 72) {
+                return `已复制：${value}`;
+            }
+            return `已复制：${value.slice(0, 42)}…${value.slice(-18)}`;
+        }
+
+        function resolveCopyableEmailHref(href) {
+            const raw = String(href || '').trim();
+            if (!isCopyableEmailHref(raw)) {
+                return '';
+            }
+            try {
+                const parsed = new URL(raw, window.location.origin);
+                const wrapped = parsed.searchParams.get('redirectUrl')
+                    || parsed.searchParams.get('redirect_url')
+                    || parsed.searchParams.get('redirect');
+                if (wrapped) {
+                    const decoded = String(wrapped).trim();
+                    if (/^https?:\/\//i.test(decoded) || decoded.toLowerCase().startsWith('mailto:')) {
+                        return decoded;
+                    }
+                }
+                if (parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'mailto:') {
+                    if (parsed.origin === window.location.origin && raw.startsWith('/')) {
+                        return raw;
+                    }
+                    return parsed.href;
+                }
+            } catch (e) {
+                // keep raw href
+            }
+            return raw;
+        }
+
+        function bindEmailBodyLinks(iframe) {
+            try {
+                const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                if (!iframeDoc || !iframeDoc.documentElement || iframeDoc.documentElement.dataset.emailLinksBound === '1') {
+                    return;
+                }
+                // about:blank 会先触发 onload，srcdoc 替换文档后再绑一次
+                if (!iframeDoc.body || !String(iframeDoc.body.innerHTML || '').trim()) {
+                    return;
+                }
+
+                if (!iframeDoc.getElementById('emailBodyLinkCopyStyle')) {
+                    const style = iframeDoc.createElement('style');
+                    style.id = 'emailBodyLinkCopyStyle';
+                    style.textContent = `
+                        html, body, a, p, div, span, td, th, li, h1, h2, h3, h4, h5, h6 {
+                            -webkit-user-select: text !important;
+                            user-select: text !important;
+                        }
+                        a[href] {
+                            cursor: copy;
+                        }
+                    `;
+                    (iframeDoc.head || iframeDoc.documentElement).appendChild(style);
+                }
+
+                iframeDoc.querySelectorAll('a[href]').forEach((anchor) => {
+                    const href = resolveCopyableEmailHref(anchor.getAttribute('href'));
+                    if (href && href !== (anchor.getAttribute('href') || '').trim()) {
+                        anchor.setAttribute('href', href);
+                    }
+                    if (href && !anchor.getAttribute('title')) {
+                        anchor.setAttribute('title', `点击复制，Ctrl+点击打开：${href}`);
+                    }
+                });
+
+                const copyLinkFromEvent = (event) => {
+                    const anchor = event.target && event.target.closest ? event.target.closest('a[href]') : null;
+                    if (!anchor) {
+                        return;
+                    }
+                    const href = resolveCopyableEmailHref(anchor.getAttribute('href'));
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (typeof event.stopImmediatePropagation === 'function') {
+                        event.stopImmediatePropagation();
+                    }
+                    if (!href) {
+                        return;
+                    }
+                    const shouldOpen = event.type === 'auxclick'
+                        ? event.button === 1
+                        : (event.metaKey || event.ctrlKey);
+                    if (shouldOpen) {
+                        window.open(href, '_blank', 'noopener,noreferrer');
+                        showToast('已打开链接', 'success');
+                        return;
+                    }
+                    copyTextToClipboard(href, formatCopiedLinkToast(href));
+                };
+
+                iframeDoc.addEventListener('click', copyLinkFromEvent, true);
+                iframeDoc.addEventListener('auxclick', copyLinkFromEvent, true);
+                iframeDoc.documentElement.dataset.emailLinksBound = '1';
+            } catch (e) {
+                console.warn('绑定邮件正文链接失败:', e);
             }
         }
 
@@ -1880,6 +2081,7 @@
                             html.offsetHeight
                         );
                         iframe.style.height = Math.max(height + 100, 600) + 'px';
+                        bindEmailBodyLinks(iframe);
                     }
                 };
 
@@ -1974,6 +2176,18 @@
         }
 
         // 切换信任模式
+        function updateRemoteImagesToggleState(checkbox) {
+            checkbox?.closest('.email-trust-toggle')?.classList.toggle('is-active', !!checkbox?.checked);
+        }
+
+        function toggleRemoteImages(checkbox) {
+            allowRemoteImages = !!checkbox?.checked;
+            updateRemoteImagesToggleState(checkbox);
+            if (currentEmailDetail) {
+                renderEmailDetail(currentEmailDetail);
+            }
+        }
+
         function updateTrustToggleState(checkbox) {
             checkbox?.closest('.email-trust-toggle')?.classList.toggle('is-active', !!checkbox?.checked);
         }
@@ -2118,6 +2332,7 @@
                             html.offsetHeight
                         );
                         iframe.style.height = (height + 100) + 'px';
+                        bindEmailBodyLinks(iframe);
                     }
                 };
 
