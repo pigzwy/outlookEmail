@@ -4,6 +4,7 @@ import os
 import tempfile
 import threading
 import unittest
+from contextlib import closing
 from email.message import EmailMessage
 from unittest.mock import patch
 
@@ -178,16 +179,12 @@ class ImapFolderResolutionTests(unittest.TestCase):
                 if command == 'FETCH':
                     uid = args[0]
                     uid_text = uid.decode('utf-8') if isinstance(uid, (bytes, bytearray)) else str(uid)
-                    if uid_text == '1':
-                        return 'OK', [(
-                            b'1 (FLAGS () INTERNALDATE "14-Apr-2026 10:00:00 +0000" RFC822 {128}',
-                            raw_old_header,
-                        )]
-                    if uid_text == '2':
-                        return 'OK', [(
-                            b'2 (FLAGS () INTERNALDATE "13-Apr-2026 10:00:00 +0000" RFC822 {128}',
-                            raw_new_header,
-                        )]
+                    return 'OK', [
+                        (b'1 (UID 1 FLAGS () INTERNALDATE "14-Apr-2026 10:00:00 +0000" BODY[HEADER] {128}', raw_old_header),
+                        b')',
+                        (b'2 (UID 2 FLAGS () INTERNALDATE "13-Apr-2026 10:00:00 +0000" BODY[HEADER] {128}', raw_new_header),
+                        b')',
+                    ]
                 return super().uid(command, *args, **kwargs)
 
         mail = GmailListMail(selectable={'INBOX'})
@@ -215,20 +212,15 @@ class ImapFolderResolutionTests(unittest.TestCase):
                 if command == 'FETCH':
                     uid = args[0]
                     uid_text = uid.decode('utf-8') if isinstance(uid, (bytes, bytearray)) else str(uid)
-                    minute = int(uid_text) % 60
-                    internal_date = f'14-Apr-2026 08:{minute:02d}:00 +0000'
-                    raw_email = (
-                        f"Subject: page message {uid_text}\r\n"
-                        "From: sender@example.com\r\n"
-                        "To: user@example.com\r\n"
-                        f"Date: Tue, 14 Apr 2026 08:{minute:02d}:00 +0000\r\n"
-                        "\r\n"
-                        "hello\r\n"
-                    ).encode('utf-8')
-                    return 'OK', [(
-                        f'{uid_text} (FLAGS () INTERNALDATE "{internal_date}" RFC822 {{{len(raw_email)}}}'.encode('utf-8'),
-                        raw_email,
-                    )]
+                    data = []
+                    for identifier in uid_text.split(','):
+                        minute = int(identifier) % 60
+                        raw_header = f'Subject: page message {identifier}\r\n\r\n'.encode()
+                        data.extend([(
+                            f'{identifier} (UID {identifier} FLAGS () INTERNALDATE "14-Apr-2026 08:{minute:02d}:00 +0000" BODY[HEADER] {{{len(raw_header)}}}'.encode(),
+                            raw_header,
+                        ), b')'])
+                    return 'OK', data
                 return super().uid(command, *args, **kwargs)
 
         def fetch_page(skip):
@@ -275,7 +267,7 @@ class ImapFolderResolutionTests(unittest.TestCase):
                 if command == 'FETCH':
                     return 'OK', [
                         (
-                            b'11 (INTERNALDATE "14-Apr-2026 08:20:50 +0000" RFC822 {128}',
+                            b'11 (UID 11 INTERNALDATE "14-Apr-2026 08:20:50 +0000" BODY[HEADER] {128}',
                             raw_email,
                         ),
                         b' FLAGS (\\Seen))',
@@ -773,10 +765,13 @@ class ImapFolderResolutionTests(unittest.TestCase):
 
             def fetch(self, message_id, query):
                 self.fetch_calls.append((str(message_id), query))
-                return 'OK', [(
-                    b'2 (FLAGS () INTERNALDATE "14-Apr-2026 08:20:50 +0000" RFC822 {128}',
-                    raw_email,
-                )]
+                data = []
+                for identifier in str(message_id).split(','):
+                    data.extend([(
+                        f'{identifier} (FLAGS () INTERNALDATE "14-Apr-2026 08:20:50 +0000" BODY[HEADER] {{128}}'.encode(),
+                        raw_email,
+                    ), b')'])
+                return 'OK', data
 
         first_mail = SearchTooLargeMail()
         second_mail = ReconnectedMail()
@@ -795,7 +790,7 @@ class ImapFolderResolutionTests(unittest.TestCase):
         self.assertEqual({item['subject'] for item in result['emails']}, {'too large fallback'})
         self.assertTrue(first_mail.logged_out)
         self.assertTrue(second_mail.logged_out)
-        self.assertEqual({call[0] for call in second_mail.fetch_calls}, {'1', '2'})
+        self.assertEqual([call[0] for call in second_mail.fetch_calls], ['2,1'])
 
     def test_custom_imap_search_too_large_reconnect_failure_keeps_error(self):
         class SearchTooLargeMail(FakeMail):
@@ -2856,8 +2851,8 @@ class RefreshTokenProxyFallbackTests(unittest.TestCase):
     def test_refresh_rotation_migration_preserves_unknown_legacy_results(self):
         with tempfile.TemporaryDirectory() as root:
             database_path = os.path.join(root, 'legacy.db')
-            with web_outlook_app.sqlite3.connect(web_outlook_app.DATABASE) as source, \
-                 web_outlook_app.sqlite3.connect(database_path) as legacy:
+            with closing(web_outlook_app.sqlite3.connect(web_outlook_app.DATABASE)) as source, \
+                 closing(web_outlook_app.sqlite3.connect(database_path)) as legacy, legacy:
                 source.backup(legacy)
                 for table, column in [('accounts', 'last_refresh_token_rotated'),
                                       ('accounts', 'last_refresh_success_at'),
@@ -2879,7 +2874,7 @@ class RefreshTokenProxyFallbackTests(unittest.TestCase):
             with patch.object(web_outlook_app, 'DATABASE', database_path):
                 web_outlook_app.init_db()
                 web_outlook_app.init_db()
-                with web_outlook_app.sqlite3.connect(database_path) as migrated:
+                with closing(web_outlook_app.sqlite3.connect(database_path)) as migrated:
                     self.assertEqual(migrated.execute('SELECT token_rotated FROM account_refresh_logs').fetchall(),
                                      [(None,), (None,), (None,)])
                     self.assertIsNone(migrated.execute('SELECT last_refresh_token_rotated FROM accounts '
@@ -4024,6 +4019,8 @@ class MultiChannelForwardingTests(unittest.TestCase):
                 (self.account_id,),
             )
             db.commit()
+            # Legacy opt-ins are materialized before a job; polling only reads routes.
+            web_outlook_app.sync_legacy_forwarding()
 
     def tearDown(self):
         with self.app.app_context():
@@ -4097,6 +4094,7 @@ class MultiChannelForwardingTests(unittest.TestCase):
             web_outlook_app.set_setting('forward_keywords', 'Access deactivated')
             web_outlook_app.set_setting('forward_channels', 'smtp,telegram,wecom')
             web_outlook_app.set_setting_encrypted('wecom_webhook_url', 'https://example.com/robot')
+            web_outlook_app.sync_legacy_forwarding()
             config = web_outlook_app.build_forwarding_job_config()
             config.update(include_junkemail=False, forward_window_start=None)
             account = web_outlook_app.get_account_by_id(self.account_id)
@@ -4141,6 +4139,7 @@ class MultiChannelForwardingTests(unittest.TestCase):
                 with self.app.app_context():
                     db = web_outlook_app.get_db()
                     db.execute('DELETE FROM forward_logs')
+                    db.execute("DELETE FROM forwarding_events WHERE source_type='account' AND source_id=?", (self.account_id,))
                     db.execute('UPDATE accounts SET forward_last_checked_at = NULL WHERE id = ?', (self.account_id,))
                     db.commit()
                 details = {'failed': None if detail_fails else matching,
@@ -4149,6 +4148,12 @@ class MultiChannelForwardingTests(unittest.TestCase):
                 self.assertTrue(result['had_processing_failure'])
                 self.assertFalse(result['cursor_updated'])
                 details['failed'] = matching
+                with self.app.app_context():
+                    # Simulate the next eligible poll without waiting for the
+                    # persisted notification retry backoff in this unit test.
+                    db = web_outlook_app.get_db()
+                    db.execute("UPDATE forwarding_deliveries SET next_attempt_at=0 WHERE status='failed'")
+                    db.commit()
                 result, _, email_mock, tg_mock, wecom_mock = self._process_keyword_messages(items, details)
                 self.assertFalse(result['had_processing_failure'])
                 with self.app.app_context():
@@ -4343,6 +4348,7 @@ class MultiChannelForwardingTests(unittest.TestCase):
                 ('second-forward@example.com',),
             )
             db.commit()
+            web_outlook_app.sync_legacy_forwarding()
 
         with patch.object(web_outlook_app, 'fetch_forward_candidates', return_value={'success': True, 'emails': [], 'error': ''}) as candidates_mock:
             with patch.object(web_outlook_app.time, 'sleep') as sleep_mock:
@@ -4381,6 +4387,7 @@ class MultiChannelForwardingTests(unittest.TestCase):
                 ('parallel-second@example.com',),
             )
             db.commit()
+            web_outlook_app.sync_legacy_forwarding()
 
         first_started = threading.Event()
         second_processed = threading.Event()
@@ -4423,6 +4430,7 @@ class MultiChannelForwardingTests(unittest.TestCase):
                 ('parallel-delay-second@example.com',),
             )
             db.commit()
+            web_outlook_app.sync_legacy_forwarding()
 
         with patch.object(web_outlook_app, 'fetch_forward_candidates', return_value={'success': True, 'emails': [], 'error': ''}) as candidates_mock:
             with patch.object(web_outlook_app.time, 'sleep') as sleep_mock:

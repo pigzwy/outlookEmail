@@ -35,6 +35,19 @@ class ExternalAccountTagsTests(unittest.TestCase):
             db.commit()
             web_outlook_app.set_setting('external_api_key', self.API_KEY)
 
+    def test_external_account_routes_are_registered_once(self):
+        for path, method, endpoint in [
+            ('/api/external/accounts', 'GET', 'api_external_get_accounts'),
+            ('/api/external/accounts/tags', 'POST', 'api_external_manage_tags'),
+        ]:
+            with self.subTest(path=path, method=method):
+                rules = [
+                    rule for rule in self.app.url_map.iter_rules()
+                    if rule.rule == path and method in rule.methods
+                ]
+                self.assertEqual(len(rules), 1)
+                self.assertEqual(rules[0].endpoint, endpoint)
+
     def test_external_api_manages_account_tags(self):
         with self.app.app_context():
             db = web_outlook_app.get_db()

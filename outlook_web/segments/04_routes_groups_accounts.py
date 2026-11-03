@@ -874,51 +874,8 @@ def api_external_manage_tags():
     operation = add_account_tag if action == 'add' else remove_account_tag
     count = sum(1 for account_id in account_ids if operation(account_id, tag_id))
     return jsonify({'success': True, 'message': f'成功处理 {count} 个账号'})
-@app.route('/api/external/accounts', methods=['GET'])
-@csrf_exempt
-@api_key_required
-def api_external_get_accounts():
-    """对外 API：通过 API Key 获取邮箱账号列表"""
-    group_id = request.args.get('group_id', type=int)
-    accounts = load_accounts(group_id, include_descendants=False)
-
-    safe_accounts = []
-    for acc in accounts:
-        safe_accounts.append(
-            serialize_account_summary(
-                acc,
-                {},
-                include_client_meta=False,
-                include_imap_meta=False
-            )
-        )
-
-    return jsonify({
-        'success': True,
-        'total': len(safe_accounts),
-        'accounts': safe_accounts
-    })
 
 
-@app.route('/api/external/accounts/tags', methods=['POST'])
-@csrf_exempt
-@api_key_required
-def api_external_manage_tags():
-    """对外 API：批量管理账号标签。"""
-    data = request.get_json(silent=True) or {}
-    account_ids = data.get('account_ids', [])
-    tag_id = data.get('tag_id')
-    action = data.get('action')
-
-    if not account_ids or not tag_id or action not in ('add', 'remove'):
-        return jsonify({
-            'success': False,
-            'error': '参数不完整，需要 account_ids, tag_id, action(add/remove)',
-        }), 400
-
-    operation = add_account_tag if action == 'add' else remove_account_tag
-    count = sum(1 for account_id in account_ids if operation(account_id, tag_id))
-    return jsonify({'success': True, 'message': f'成功处理 {count} 个账号'})
 @app.route('/api/external/accounts', methods=['POST'])
 @csrf_exempt
 @api_key_write_required

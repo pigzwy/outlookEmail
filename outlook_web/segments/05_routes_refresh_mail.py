@@ -2584,17 +2584,8 @@ def delete_oauth_imap_items(account: Dict[str, Any], items: List[Dict[str, str]]
     return result
 
 
-def normalize_email_list_item(item: Dict[str, Any], folder: str) -> Dict[str, Any]:
+def annotate_email_verification_code(item: Dict[str, Any]) -> Dict[str, Any]:
     row = dict(item or {})
-    row['subject'] = row.get('subject', '无主题')
-    row['from'] = row.get('from', '未知')
-    row['to'] = str(row.get('to', '') or '')
-    row['date'] = row.get('date', '')
-    row['is_read'] = bool(row.get('is_read', False))
-    row['has_attachments'] = bool(row.get('has_attachments', False))
-    row['body_preview'] = row.get('body_preview', '')
-    row['folder'] = row.get('folder') or folder
-    row['id_mode'] = row.get('id_mode', '')
     code = str(row.get('verification_code') or '').strip()
     if not code:
         from outlook_web.verification_code import extract_verification_code
@@ -2604,6 +2595,20 @@ def normalize_email_list_item(item: Dict[str, Any], folder: str) -> Dict[str, An
             body_html=row.get('body') or '',
         ) or ''
     row['verification_code'] = code
+    return row
+
+
+def normalize_email_list_item(item: Dict[str, Any], folder: str) -> Dict[str, Any]:
+    row = annotate_email_verification_code(item)
+    row['subject'] = row.get('subject', '无主题')
+    row['from'] = row.get('from', '未知')
+    row['to'] = str(row.get('to', '') or '')
+    row['date'] = row.get('date', '')
+    row['is_read'] = bool(row.get('is_read', False))
+    row['has_attachments'] = bool(row.get('has_attachments', False))
+    row['body_preview'] = row.get('body_preview', '')
+    row['folder'] = row.get('folder') or folder
+    row['id_mode'] = row.get('id_mode', '')
     return row
 
 
@@ -2808,7 +2813,8 @@ def upsert_retained_normal_mail_list_items(account: Dict[str, Any], folder: str,
             received_at_sort = excluded.received_at_sort,
             is_read = excluded.is_read,
             has_attachments = excluded.has_attachments,
-            body_preview = excluded.body_preview,
+            body_preview = CASE WHEN excluded.body_preview = ''
+                THEN retained_normal_mail_messages.body_preview ELSE excluded.body_preview END,
             list_cached = 1,
             list_cached_at = CURRENT_TIMESTAMP,
             last_synced_at = CURRENT_TIMESTAMP,
@@ -3077,6 +3083,7 @@ def build_retained_detail_success_response(account: Dict[str, Any], folder: str,
                                            message_id: str, email_detail: Dict[str, Any],
                                            method: str, detail_source: str,
                                            id_mode: str = '') -> Dict[str, Any]:
+    email_detail = annotate_email_verification_code(email_detail)
     if is_normal_mail_local_retention_enabled():
         upsert_retained_normal_mail_detail(
             account, folder, message_id, email_detail, method, detail_source, id_mode
@@ -3297,7 +3304,9 @@ def fetch_retained_normal_mail_detail(account: Dict[str, Any], folder: str,
     ).fetchone()
     if not row:
         return None
-    return retained_mail_row_to_detail_response(row)
+    result = retained_mail_row_to_detail_response(row)
+    result['email'] = annotate_email_verification_code(result['email'])
+    return result
 
 
 def normalize_body_retention_items(raw_items: Any, fallback_folder: str,

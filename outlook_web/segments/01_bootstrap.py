@@ -56,6 +56,7 @@ from outlook_web.mailcom_service import (
     is_mailcom_account,
     mailcom_unsupported_action,
 )
+import outlook_web.forwarding_store as forwarding_store
 
 # 尝试导入 Flask-WTF CSRF 保护
 try:
@@ -804,6 +805,9 @@ INDEX_CSS_FILES = (
     'css/index/07-meta.css',
     'css/index/08-responsive.css',
     'css/index/09-icloud.css',
+    'css/index/forwarding/tokens.css',
+    'css/index/forwarding/base.css',
+    'css/index/10-forwarding.css',
 )
 INDEX_JS_FILES = (
     'js/index/01-core.js',
@@ -820,6 +824,7 @@ INDEX_JS_FILES = (
     'js/index/12-outlook-upload-accounts.js',
     'js/index/13-projects.js',
     'js/index/14-icloud.js',
+    'js/index/15-forwarding.js',
 )
 
 # GPTMail API 配置
@@ -2599,6 +2604,13 @@ def init_db():
 
     from outlook_web.icloud_store import init_icloud_schema
     init_icloud_schema(conn)
+
+    try:
+        forwarding_store.init_schema(conn, encrypt_data, decrypt_data)
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
 
     conn.commit()
     conn.close()

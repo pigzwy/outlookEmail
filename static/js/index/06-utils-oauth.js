@@ -146,7 +146,6 @@
             setOAuthElementDisplay('copyOauthEmailBtn', reauthMode);
 
             setOAuthElementDisplay('oauthTargetGroup', !reauthMode);
-            setOAuthElementDisplay('oauthForwardGroup', !reauthMode, 'flex');
             setOAuthElementDisplay('oauthPreviewPasswordGroup', !reauthMode);
             setOAuthElementDisplay('oauthPreviewGroupGroup', !reauthMode);
 
@@ -255,7 +254,6 @@
             document.getElementById('oauthEmailInput').value = oauthReauthorizeAccount?.email || '';
             document.getElementById('oauthPasswordInput').value = '';
             document.getElementById('redirectUrlInput').value = '';
-            document.getElementById('oauthForwardEnabled').checked = false;
             invalidateRefreshTokenPreview();
             applyOAuthModalModeUI();
 
@@ -368,7 +366,6 @@
             const password = document.getElementById('oauthPasswordInput').value;
             const redirectUrl = document.getElementById('redirectUrlInput').value.trim();
             const groupId = parseInt(document.getElementById('tokenSaveGroupSelect')?.value || '0', 10);
-            const forwardEnabled = !!document.getElementById('oauthForwardEnabled')?.checked;
 
             if (!redirectUrl) {
                 showToast('请先粘贴授权后的完整 URL', 'error');
@@ -403,7 +400,6 @@
                         client_id: data.client_id,
                         refresh_token: data.refresh_token,
                         group_id: groupId,
-                        forward_enabled: forwardEnabled
                     };
                     renderRefreshTokenPreview();
 
@@ -558,7 +554,6 @@
                         account_string: accountString,
                         group_id: oauthPreviewAccount.group_id,
                         provider: 'outlook',
-                        forward_enabled: !!oauthPreviewAccount.forward_enabled
                     })
                 });
 
