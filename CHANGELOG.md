@@ -15,6 +15,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 - 移除重复注册的外部账号列表与标签接口，避免 Flask 加载时发生同名 endpoint 冲突。
+- Docker 构建新增隔离的应用启动与路由检查，启动失败时阻止发布镜像；部署数据、密钥和本地测试环境不再进入构建上下文。
 - IMAP 列表仅取邮件头时，打开详情后从正文补识别验证码并回填列表；本地缓存详情同样支持识别，不恢复自动正文预取。
 
 ## [3.0.28] - 2026-10-31

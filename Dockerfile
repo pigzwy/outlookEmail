@@ -25,6 +25,9 @@ RUN pip install --upgrade pip && \
 # 复制应用代码
 COPY . .
 
+# 使用临时数据库检查应用和路由，阻止发布无法启动的镜像
+RUN python scripts/check_app_startup.py
+
 # 创建数据目录
 RUN mkdir -p /app/data
 

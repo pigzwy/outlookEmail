@@ -23,10 +23,20 @@ ENV/
 .git/
 .gitignore
 
-# 数据库文件（使用 volume 挂载）
+# 数据库及部署密钥（仅通过 volume / 环境变量提供）
+data/
 *.db
 *.sqlite
 *.sqlite3
+.env
+.env.*
+secret_key.txt
+
+# 本地测试环境、临时产物和外部记忆不进入镜像
+.test_tmp/
+.tmp/
+.dsh-meow/
+.trellis/
 
 # 日志
 *.log
