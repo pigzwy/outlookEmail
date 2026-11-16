@@ -2109,7 +2109,10 @@ def is_graph_delete_reauthorization_error(status_code: Any, error_body: Any) -> 
 def delete_emails_graph(client_id: str, refresh_token: str, message_ids: List[str], proxy_url: str = None,
                         fallback_proxy_urls: List[str] = None) -> Dict[str, Any]:
     """通过 Graph API 批量删除邮件（永久删除）"""
-    access_token = get_access_token_graph(client_id, refresh_token, proxy_url, fallback_proxy_urls)
+    access_token = get_access_token_graph(
+        client_id, refresh_token, proxy_url, fallback_proxy_urls,
+        required_scope='https://graph.microsoft.com/Mail.ReadWrite',
+    )
     if not access_token:
         return {
             "success": False,
@@ -2884,7 +2887,8 @@ def normalize_retained_mail_attachment_metadata(attachments: Any) -> List[Dict[s
 
 def find_existing_retained_normal_mail_key(account_id: int, folder: str,
                                            provider_message_ids: List[str],
-                                           preferred_id_modes: List[str], db=None) -> Optional[Dict[str, str]]:
+                                           preferred_id_modes: List[str], db=None,
+                                           strict_id_modes: bool = False) -> Optional[Dict[str, str]]:
     normalized_ids = []
     for value in provider_message_ids:
         message_id = str(value or '').strip()
@@ -2907,6 +2911,10 @@ def find_existing_retained_normal_mail_key(account_id: int, folder: str,
         return None
 
     preferred = [str(mode or '').strip().lower() for mode in preferred_id_modes]
+    if strict_id_modes:
+        rows = [row for row in rows if str(row['id_mode'] or '').strip().lower() in preferred]
+        if not rows:
+            return None
 
     def sort_key(row) -> tuple:
         row_message_id = str(row['provider_message_id'] or '')
@@ -2930,17 +2938,23 @@ def find_existing_retained_normal_mail_key(account_id: int, folder: str,
 
 def normalize_retained_detail_id_mode(method: str, detail_source: str,
                                       explicit_id_mode: str = '') -> str:
+    normalized_source = str(detail_source or '').strip().lower()
+    # mail.com 使用 Cookie 会话，其消息 ID 不是 IMAP UID；即使旧请求传入 uid 也不能混用。
+    if normalized_source == MAILCOM_REQUEST_METHOD:
+        return MAILCOM_REQUEST_METHOD
+
     query_id_mode = str(explicit_id_mode or '').strip().lower()
     if query_id_mode:
         return query_id_mode
 
-    normalized_source = str(detail_source or '').strip().lower()
     if normalized_source == 'graph':
         return 'graph'
     return 'uid'
 
 
 def retained_detail_preferred_id_modes(primary_id_mode: str, detail_source: str) -> List[str]:
+    if str(detail_source or '').strip().lower() == MAILCOM_REQUEST_METHOD:
+        return [MAILCOM_REQUEST_METHOD]
     preferred = [primary_id_mode]
     if str(detail_source or '').strip().lower() != 'graph':
         preferred.extend(['uid', 'sequence', ''])
@@ -2964,6 +2978,7 @@ def resolve_retained_normal_mail_detail_key(account_id: int, folder: str,
         [provider_message_id, request_id],
         retained_detail_preferred_id_modes(id_mode, detail_source),
         db=db,
+        strict_id_modes=str(detail_source or '').strip().lower() == MAILCOM_REQUEST_METHOD,
     )
     return existing_key or {
         'provider_message_id': provider_message_id,
@@ -3105,6 +3120,7 @@ def fetch_imap_account_detail_response(account: Dict[str, Any], folder: str,
         account.get('provider', 'custom'),
         proxy_url,
         strict_id_mode=strict_id_mode,
+        preferred_id_mode=id_mode or 'uid',
     )
     if detail_result.get('success'):
         return build_retained_detail_success_response(
@@ -4247,6 +4263,9 @@ def api_get_raw_email(email_addr, message_id):
         return jsonify({'success': False, 'error': '账号不存在'})
 
     method = request.args.get('method', 'graph')
+    id_mode = str(request.args.get('id_mode') or '').strip().lower()
+    if id_mode == 'sequence':
+        return jsonify(imap_identity_error_result(ImapMessageIdentityError()))
     folder = normalize_folder_name(request.args.get('folder', 'inbox'))
     proxy_url = get_account_proxy_url(account)
     fallback_proxy_urls = get_account_proxy_failover_urls(account)
@@ -4268,7 +4287,8 @@ def api_get_raw_email(email_addr, message_id):
             message_id,
             folder,
             account.get('provider', 'custom'),
-            proxy_url
+            proxy_url,
+            preferred_id_mode=id_mode or 'uid',
         )
     elif method == 'graph':
         raw_content = get_raw_email_graph(
@@ -4338,6 +4358,8 @@ def normalize_email_detail_error(error: Any, fallback_message: str = '获取邮�
 def fetch_email_detail_for_account(account, message_id, method='graph', folder='inbox',
                                    id_mode='', prefer_local=False, strict_id_mode=False,
                                    force_method=False):
+    if str(id_mode or '').strip().lower() == 'sequence':
+        return imap_identity_error_result(ImapMessageIdentityError())
     if account.get('icloud_address'):
         primary = dict(account)
         address = primary.pop('icloud_address')
@@ -4353,7 +4375,9 @@ def fetch_email_detail_for_account(account, message_id, method='graph', folder='
     fallback_proxy_urls = get_account_proxy_failover_urls(account)
 
     if prefer_local and is_normal_mail_local_retention_enabled():
-        retained_detail = fetch_retained_normal_mail_detail(account, folder, message_id, id_mode)
+        # Cookie 消息只能命中 mail.com 缓存，不能把旧 IMAP UID 当成网页消息。
+        retained_id_mode = MAILCOM_REQUEST_METHOD if is_mailcom_account(account) else id_mode
+        retained_detail = fetch_retained_normal_mail_detail(account, folder, message_id, retained_id_mode)
         if retained_detail and not retained_detail_has_incomplete_attachment_metadata(retained_detail):
             return retained_detail
 
@@ -4470,7 +4494,8 @@ def download_email_attachment_for_account(account, method, message_id, attachmen
             attachment_id,
             folder,
             account.get('provider', 'custom'),
-            proxy_url
+            proxy_url,
+            preferred_id_mode=id_mode or 'uid',
         )
 
     if method == 'graph':
@@ -4512,7 +4537,8 @@ def get_email_attachment_metadata_for_download(account, method, message_id, fold
             message_id,
             folder,
             account.get('provider', 'custom'),
-            proxy_url
+            proxy_url,
+            preferred_id_mode=id_mode or 'uid',
         )
         if detail_result.get('success'):
             return {'success': True, 'attachments': detail_result.get('email', {}).get('attachments', [])}

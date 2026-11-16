@@ -816,6 +816,24 @@ def normalize_account_status(status: Any) -> str:
     return 'active'
 
 
+def normalize_graph_token_scope(scope: Any) -> str:
+    """归一化账号级 Graph Token scope；空值表示自动（依次回退并记住成功项）。"""
+    normalized = ' '.join(str(scope or '').split())
+    if normalized.lower() in {'auto', 'recommended', '自动'}:
+        return ''
+    return normalized
+
+
+def register_account_graph_token_scope_preference(account: Dict[str, Any]) -> None:
+    """为已解密的账号登记 scope，供页面请求和后台转发共用。"""
+    account['graph_token_scope'] = normalize_graph_token_scope(account.get('graph_token_scope'))
+    register_graph_token_scope_preference(
+        account.get('client_id', ''),
+        account.get('refresh_token', ''),
+        account['graph_token_scope'],
+    )
+
+
 # ==================== 标签管理 ====================
 
 def get_tags() -> List[Dict]:
@@ -1038,6 +1056,7 @@ def resolve_account_record(row: sqlite3.Row, matched_alias: str = '',
         except Exception:
             pass
     account['provider'] = normalize_provider(account.get('provider'), account.get('email', ''))
+    register_account_graph_token_scope_preference(account)
     account['account_type'] = account.get('account_type') or get_provider_meta(
         account['provider'], account.get('email', '')
     ).get('account_type', 'outlook')
@@ -1425,6 +1444,7 @@ def serialize_account_summary(account: Dict[str, Any], last_refresh_log: Optiona
         'account_type': account.get('account_type', 'outlook'),
         'provider': account.get('provider', 'outlook'),
         'authorization_type': get_account_authorization_type(account),
+        'graph_token_scope': normalize_graph_token_scope(account.get('graph_token_scope')),
         'forward_enabled': bool(account.get('forward_enabled')),
         'proxy_override_enabled': account_has_proxy_override(account),
         'last_refresh_at': refresh_state['last_refresh_at'],
@@ -1453,10 +1473,10 @@ def serialize_account_summary(account: Dict[str, Any], last_refresh_log: Optiona
 ACCOUNT_INSERT_SQL = '''
     INSERT OR IGNORE INTO accounts (
         email, password, client_id, refresh_token, group_id, sort_order, remark,
-        status, account_type, provider, imap_host, imap_port, imap_password, forward_enabled,
+        status, account_type, provider, graph_token_scope, imap_host, imap_port, imap_password, forward_enabled,
         forward_last_checked_at, proxy_url, fallback_proxy_url_1, fallback_proxy_url_2
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 '''
 
 
@@ -1466,7 +1486,7 @@ def build_account_insert_values(email_addr: str, password: str, client_id: str =
                                 imap_password: str = '', forward_enabled: bool = False,
                                 sort_order: Optional[int] = None, status: str = 'active',
                                 proxy_url: str = '', fallback_proxy_url_1: str = '',
-                                fallback_proxy_url_2: str = '') -> tuple:
+                                fallback_proxy_url_2: str = '', graph_token_scope: str = '') -> tuple:
     encrypted_password = encrypt_data(password) if password else password
     encrypted_refresh_token = encrypt_data(refresh_token) if refresh_token else refresh_token
     encrypted_imap_password = encrypt_data(imap_password) if imap_password else imap_password
@@ -1489,6 +1509,7 @@ def build_account_insert_values(email_addr: str, password: str, client_id: str =
         normalized_status,
         normalized_account_type,
         normalized_provider,
+        normalize_graph_token_scope(graph_token_scope),
         normalized_imap_host,
         normalized_imap_port,
         encrypted_imap_password,
@@ -1506,7 +1527,7 @@ def add_account(email_addr: str, password: str, client_id: str = '', refresh_tok
                 imap_password: str = '', forward_enabled: bool = False,
                 sort_order: Optional[int] = None, status: str = 'active',
                 proxy_url: str = '', fallback_proxy_url_1: str = '',
-                fallback_proxy_url_2: str = '') -> bool:
+                fallback_proxy_url_2: str = '', graph_token_scope: str = '') -> bool:
     """添加邮箱账号"""
     db = get_db()
     try:
@@ -1515,7 +1536,7 @@ def add_account(email_addr: str, password: str, client_id: str = '', refresh_tok
             email_addr, password, client_id, refresh_token, group_id, remark,
             account_type, provider, imap_host, imap_port, imap_password,
             forward_enabled, sort_order, status,
-            proxy_url, fallback_proxy_url_1, fallback_proxy_url_2
+            proxy_url, fallback_proxy_url_1, fallback_proxy_url_2, graph_token_scope
         ))
         db.commit()
         return db.total_changes > before_changes
@@ -1528,7 +1549,7 @@ def add_accounts_bulk(parsed_accounts: List[Dict[str, Any]], group_id: int = 1,
                       sort_order: Optional[int] = None, remark: str = '',
                       status: str = 'active', tag_ids: Optional[List[int]] = None,
                       proxy_url: str = '', fallback_proxy_url_1: str = '',
-                      fallback_proxy_url_2: str = '') -> Dict[str, int]:
+                      fallback_proxy_url_2: str = '', graph_token_scope: str = '') -> Dict[str, int]:
     """批量添加邮箱账号，单事务写入，重复邮箱自动跳过。"""
     if not parsed_accounts:
         return {'added_count': 0, 'skipped_count': 0}
@@ -1562,7 +1583,8 @@ def add_accounts_bulk(parsed_accounts: List[Dict[str, Any]], group_id: int = 1,
             normalized_status,
             proxy_url,
             fallback_proxy_url_1,
-            fallback_proxy_url_2
+            fallback_proxy_url_2,
+            graph_token_scope
         )
         for parsed in parsed_accounts
     ]
@@ -2088,7 +2110,8 @@ def update_account(account_id: int, email_addr: str, password: str, client_id: s
                    imap_host: str = '', imap_port: int = 993, imap_password: str = '',
                    forward_enabled: bool = False, proxy_url: str = '',
                    fallback_proxy_url_1: str = '', fallback_proxy_url_2: str = '',
-                   authorization_type: Optional[str] = None) -> bool:
+                   authorization_type: Optional[str] = None,
+                   graph_token_scope: Optional[str] = None) -> bool:
     """更新邮箱账号"""
     db = get_db()
     try:
@@ -2100,6 +2123,9 @@ def update_account(account_id: int, email_addr: str, password: str, client_id: s
         normalized_proxy_url = str(proxy_url or '').strip()
         normalized_fallback_proxy_url_1 = str(fallback_proxy_url_1 or '').strip()
         normalized_fallback_proxy_url_2 = str(fallback_proxy_url_2 or '').strip()
+        normalized_graph_token_scope = (
+            None if graph_token_scope is None else normalize_graph_token_scope(graph_token_scope)
+        )
 
         current_account = db.execute(
             'SELECT forward_enabled, forward_last_checked_at, account_type, authorization_type FROM accounts WHERE id = ?',
@@ -2122,6 +2148,7 @@ def update_account(account_id: int, email_addr: str, password: str, client_id: s
                 SET email = ?, password = ?, client_id = ?, refresh_token = ?,
                     group_id = ?, sort_order = ?, remark = ?, status = ?, account_type = ?, provider = ?,
                     authorization_type = ?,
+                    graph_token_scope = COALESCE(?, graph_token_scope),
                     imap_host = ?, imap_port = ?, imap_password = ?, forward_enabled = ?,
                     forward_last_checked_at = ?, proxy_url = ?, fallback_proxy_url_1 = ?,
                     fallback_proxy_url_2 = ?, updated_at = CURRENT_TIMESTAMP
@@ -2129,7 +2156,8 @@ def update_account(account_id: int, email_addr: str, password: str, client_id: s
             ''', (
                 email_addr, encrypted_password, client_id, encrypted_refresh_token, group_id, normalized_sort_order,
                 remark, status,
-                account_type, provider, effective_authorization_type, imap_host, imap_port, encrypted_imap_password, 1,
+                account_type, provider, effective_authorization_type, normalized_graph_token_scope,
+                imap_host, imap_port, encrypted_imap_password, 1,
                 datetime.now(timezone.utc).isoformat(), normalized_proxy_url,
                 normalized_fallback_proxy_url_1, normalized_fallback_proxy_url_2, account_id
             ))
@@ -2139,6 +2167,7 @@ def update_account(account_id: int, email_addr: str, password: str, client_id: s
                 SET email = ?, password = ?, client_id = ?, refresh_token = ?,
                     group_id = ?, sort_order = ?, remark = ?, status = ?, account_type = ?, provider = ?,
                     authorization_type = ?,
+                    graph_token_scope = COALESCE(?, graph_token_scope),
                     imap_host = ?, imap_port = ?, imap_password = ?, forward_enabled = ?,
                     proxy_url = ?, fallback_proxy_url_1 = ?, fallback_proxy_url_2 = ?,
                     updated_at = CURRENT_TIMESTAMP
@@ -2146,10 +2175,13 @@ def update_account(account_id: int, email_addr: str, password: str, client_id: s
             ''', (
                 email_addr, encrypted_password, client_id, encrypted_refresh_token, group_id, normalized_sort_order,
                 remark, status,
-                account_type, provider, effective_authorization_type, imap_host, imap_port, encrypted_imap_password, 1 if forward_enabled else 0,
+                account_type, provider, effective_authorization_type, normalized_graph_token_scope,
+                imap_host, imap_port, encrypted_imap_password, 1 if forward_enabled else 0,
                 normalized_proxy_url, normalized_fallback_proxy_url_1, normalized_fallback_proxy_url_2, account_id
             ))
         db.commit()
+        if normalized_graph_token_scope is not None:
+            register_graph_token_scope_preference(client_id, refresh_token, normalized_graph_token_scope)
         return True
     except Exception:
         return False
